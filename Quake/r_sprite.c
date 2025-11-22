@@ -248,9 +248,9 @@ static void R_DrawSpriteModel_Real (entity_t *e, qboolean showtris)
 		return;
 	}
 
-        if (numbatchquads)
-                if (numbatchquads == countof(batchverts) / 4 || batchmodel != e->model || batchtexture != frame->gltexture)
-                        R_FlushSpriteInstances ();
+	if (numbatchquads)
+		if (numbatchquads == countof(batchverts) / 4 || batchmodel != e->model || batchtexture != frame->gltexture)
+			R_FlushSpriteInstances ();
 
 	if (!numbatchquads)
 	{
@@ -289,7 +289,7 @@ void R_DrawSpriteModels (entity_t **ents, int count)
 	int i;
 	for (i = 0; i < count; i++)
 		R_DrawSpriteModel_Real (ents[i], false);
-        R_FlushSpriteInstances ();
+	R_FlushSpriteInstances ();
 }
 
 /*
@@ -302,5 +302,5 @@ void R_DrawSpriteModels_ShowTris (entity_t **ents, int count)
 	int i;
 	for (i = 0; i < count; i++)
 		R_DrawSpriteModel_Real (ents[i], true);
-        R_FlushSpriteInstances ();
+	R_FlushSpriteInstances ();
 }

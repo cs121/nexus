@@ -93,7 +93,6 @@ typedef struct texture_s
 	textype_t			type;
 	struct gltexture_s	*gltexture; //johnfitz -- pointer to gltexture
 	struct gltexture_s	*fullbright; //johnfitz -- fullbright mask texture
-	struct gltexture_s	*emissive;   // emissive texture map (Quake 3 style glow)
 	int					anim_total;				// total tenths in sequence ( 0 = no)
 	int					anim_min, anim_max;		// time for this frame min <=time< max
 	struct texture_s	*anim_next;		// in the animation sequence
@@ -137,27 +136,24 @@ typedef struct glvert_s {
 
 typedef struct msurface_s
 {
-        mplane_t        *plane;
-        float           mins[3];                // johnfitz -- for frustum culling
-        float           maxs[3];                // johnfitz -- for frustum culling
-        int                     flags;
+	mplane_t	*plane;
+	float		mins[3];		// johnfitz -- for frustum culling
+	float		maxs[3];		// johnfitz -- for frustum culling
+	int			flags;
 
-        int                     vbo_firstvert;          // index of this surface's first vert in the VBO
-        int                     firstedge;                      // look up in model->surfedges[], negative numbers
-        short           numedges;                       // are backwards edges
+	int			vbo_firstvert;		// index of this surface's first vert in the VBO
+	int			firstedge;			// look up in model->surfedges[], negative numbers
+	short		numedges;			// are backwards edges
 
-        short           lightmaptexturenum;
-        short           extents[2];
-        short           light_s, light_t;       // gl lightmap coordinates
+	short		lightmaptexturenum;
+	short		extents[2];
+	short		light_s, light_t;	// gl lightmap coordinates
 
-        vec4_t          lmvecs[2];
-        float           lmvecscale[2];
+	byte		styles[MAXLIGHTMAPS];
+	byte		*samples;			// [numstyles*surfsize]
 
-        unsigned short          styles[MAXLIGHTMAPS];
-        byte            *samples;                       // [numstyles*surfsize]
-
-        int                     texturemins[2];
-        mtexinfo_t      *texinfo;
+	int			texturemins[2];
+	mtexinfo_t	*texinfo;
 } msurface_t;
 
 typedef struct mnode_s
@@ -344,7 +340,6 @@ typedef struct {
 	} poseverttype;	//spike
 	struct gltexture_s	*gltextures[MAX_SKINS][4]; //johnfitz
 	struct gltexture_s	*fbtextures[MAX_SKINS][4]; //johnfitz
-	struct gltexture_s	*emissivetextures[MAX_SKINS][4];
 	int					texels[MAX_SKINS];	// only for player skins
 	maliasframedesc_t	frames[1];	// variable sized
 } aliashdr_t;
@@ -399,7 +394,6 @@ typedef enum {mod_brush, mod_alias, mod_sprite, mod_numtypes} modtype_t;
 #define	MOD_NOLERP		256		//don't lerp when animating
 #define	MOD_NOSHADOW	512		//don't cast a shadow
 #define	MOD_FBRIGHTHACK	1024	//when fullbrights are disabled, use a hack to render this model brighter
-#define MOD_HDRLIGHTING (1u<<13)	// light samples are in e5bgr9 format. int aligned.
 //johnfitz
 
 //
@@ -452,7 +446,7 @@ typedef struct qmodel_s
 	int			firstmodelsurface, nummodelsurfaces;
 
 	int			numsubmodels;
-	mmodel_t	*submodels;
+	dmodel_t	*submodels;
 
 	int			numplanes;
 	mplane_t	*planes;
@@ -493,9 +487,7 @@ typedef struct qmodel_s
 	int			*usedtextures;
 
 	byte		*visdata;
-	void		*lightgrid;
 	byte		*lightdata;
-	size_t		lightdatasamples;
 	char		*entities;
 
 	qboolean	litfile;
@@ -538,7 +530,5 @@ byte	*Mod_NoVisPVS (qmodel_t *model);
 void Mod_SetExtraFlags (qmodel_t *mod);
 size_t Mod_SanitizeMapDescription (char *dst, size_t dstsize, const char *src);
 qboolean Mod_LoadMapDescription (char *desc, size_t maxchars, const char *map);
-
-void BSPX_LightGridLoad(qmodel_t *model, void *lgdata, size_t lgsize);
 
 #endif	/* GL_MODEL_H */
