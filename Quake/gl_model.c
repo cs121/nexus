@@ -37,6 +37,77 @@ static qmodel_t *Mod_LoadModel (qmodel_t *mod, qboolean crash);
 
 static void Mod_Print (void);
 
+static const char *bsp_lump_names[HEADER_LUMPS] = {
+        "entities",
+        "planes",
+        "textures",
+        "vertexes",
+        "visibility",
+        "nodes",
+        "texinfo",
+        "faces",
+        "lighting",
+        "clipnodes",
+        "leafs",
+        "marksurfaces",
+        "edges",
+        "surfedges",
+        "models"
+};
+
+static const qboolean bsp_lump_used[HEADER_LUMPS] = {
+        true,   // entities
+        true,   // planes
+        true,   // textures
+        true,   // vertexes
+        true,   // visibility
+        true,   // nodes
+        true,   // texinfo
+        true,   // faces
+        true,   // lighting
+        true,   // clipnodes
+        true,   // leafs
+        true,   // marksurfaces
+        true,   // edges
+        true,   // surfedges
+        true    // models
+};
+
+typedef struct bspx_lumpinfo_s
+{
+        const char      *name;
+        qboolean        used;
+} bspx_lumpinfo_t;
+
+static const bspx_lumpinfo_t bspx_lump_info[] = {
+        {"DECOUPLED_LM", false},
+        {"LIGHTGRID_OCTREE", false},
+        {"LIGHTGRIDS", false},
+        {"LIGHTING_E5BGR9", false},
+        {"ENVMAP", false},
+        {"SURFENVMAP", false},
+        {"BRUSHLIST", false},
+        {"ZIP_PAKFILE", false},
+        {"RGBLIGHTING", false},
+        {"VERTEXNORMALS", false},
+        {"FACENORMALS", false},
+        {"LIGHTINGDIR", false},
+        {"LMSTYLE16", false}
+};
+
+typedef struct bspx_lump_s
+{
+        char    name[16];
+        int             fileofs;
+        int             filelen;
+} bspx_lump_t;
+
+typedef struct bspx_header_s
+{
+        char    id[4];
+        int             numlumps;
+} bspx_header_t;
+
 static cvar_t	external_ents = {"external_ents", "1", CVAR_ARCHIVE};
 static cvar_t	external_vis = {"external_vis", "1", CVAR_ARCHIVE};
 cvar_t			r_md5 = {"r_md5", "1", CVAR_ARCHIVE};
@@ -84,6 +155,168 @@ static void R_MD5_f (cvar_t *cvar)
 	if (cls.state == ca_connected && cls.signon == SIGNONS)
 		for (i = 0; i < cl.maxclients; i++)
 			R_TranslateNewPlayerSkin (i);
+}
+
+static const byte *Mod_FindBspx (const byte *file_data, qfileofs_t filesize, int *out_num_lumps)
+{
+        const byte              *scan;
+        const byte              *end;
+        bspx_header_t   header;
+
+        if (!file_data || filesize < (qfileofs_t) (sizeof(dheader_t) + sizeof(bspx_header_t)))
+                return NULL;
+
+        end = file_data + (size_t)filesize - sizeof(bspx_header_t);
+
+        for (scan = file_data; scan <= end; scan++)
+        {
+                int numlumps;
+                qfileofs_t table_bytes;
+
+                if (memcmp(scan, "BSPX", 4))
+                        continue;
+
+                memcpy (&header, scan, sizeof(header));
+                numlumps = LittleLong (header.numlumps);
+
+                if (numlumps < 0 || numlumps > 4096)
+                        continue;
+
+                table_bytes = (qfileofs_t)numlumps * (qfileofs_t)sizeof(bspx_lump_t);
+
+                if (table_bytes > filesize)
+                        continue;
+
+                if (scan + sizeof(bspx_header_t) + (size_t)table_bytes > file_data + (size_t)filesize)
+                        continue;
+
+                if (out_num_lumps)
+                        *out_num_lumps = numlumps;
+
+                return scan;
+        }
+
+        return NULL;
+}
+
+static void Mod_LogBspLumps (const dheader_t *header, const byte *file_data, qfileofs_t filesize)
+{
+        char found[256] = "";
+        char used[256] = "";
+        char not_implemented[256] = "";
+        int i;
+
+        for (i = 0; i < HEADER_LUMPS; i++)
+        {
+                qboolean has_data = header->lumps[i].filelen > 0;
+
+                if (has_data)
+                {
+                        if (found[0])
+                                q_strlcat(found, ", ", sizeof(found));
+                        q_strlcat(found, bsp_lump_names[i], sizeof(found));
+                }
+
+                if (bsp_lump_used[i])
+                {
+                        if (used[0])
+                                q_strlcat(used, ", ", sizeof(used));
+                        q_strlcat(used, bsp_lump_names[i], sizeof(used));
+                }
+                else if (has_data && !bsp_lump_used[i])
+                {
+                        if (not_implemented[0])
+                                q_strlcat(not_implemented, ", ", sizeof(not_implemented));
+                        q_strlcat(not_implemented, bsp_lump_names[i], sizeof(not_implemented));
+                }
+        }
+
+        Con_Printf ("BSP lumps found: %s\n", found[0] ? found : "none");
+        Con_Printf ("BSP lumps used: %s\n", used[0] ? used : "none");
+        Con_Printf ("BSP lumps not implemented: %s\n", not_implemented[0] ? not_implemented : "none");
+
+        if (file_data && filesize > 0)
+        {
+                const byte      *bspx_base;
+                int                     num_bspx_lumps = 0;
+
+                bspx_base = Mod_FindBspx (file_data, filesize, &num_bspx_lumps);
+
+                if (bspx_base && num_bspx_lumps > 0)
+                {
+                        const byte       *bspx_lumps = bspx_base + sizeof(bspx_header_t);
+                        char bspx_found[512] = "";
+                        char bspx_used[512] = "";
+                        char bspx_not_implemented[512] = "";
+                        char bspx_unknown[512] = "";
+
+                        for (i = 0; i < num_bspx_lumps; i++)
+                        {
+                                bspx_lump_t     disk_lump;
+                                char            lump_name[sizeof(disk_lump.name) + 1];
+                                int             lump_ofs;
+                                int             lump_len;
+                                qboolean        known = false;
+
+                                memcpy (&disk_lump, bspx_lumps + i * sizeof(bspx_lump_t), sizeof(disk_lump));
+
+                                memcpy (lump_name, disk_lump.name, sizeof(disk_lump.name));
+                                lump_name[sizeof(disk_lump.name)] = '\0';
+
+                                lump_ofs = LittleLong (disk_lump.fileofs);
+                                lump_len = LittleLong (disk_lump.filelen);
+
+                                if (lump_ofs < 0 || lump_len <= 0 || (qfileofs_t)lump_ofs + (qfileofs_t)lump_len > filesize)
+                                {
+                                        continue;
+                                }
+
+                                if (bspx_found[0])
+                                        q_strlcat (bspx_found, ", ", sizeof(bspx_found));
+                                q_strlcat (bspx_found, lump_name, sizeof(bspx_found));
+
+                                for (int j = 0; j < (int) (sizeof(bspx_lump_info) / sizeof(bspx_lump_info[0])); j++)
+                                {
+                                        if (!q_strcasecmp (lump_name, bspx_lump_info[j].name))
+                                        {
+                                                known = true;
+                                                if (bspx_lump_info[j].used)
+                                                {
+                                                        if (bspx_used[0])
+                                                                q_strlcat (bspx_used, ", ", sizeof(bspx_used));
+                                                        q_strlcat (bspx_used, lump_name, sizeof(bspx_used));
+                                                }
+                                                else
+                                                {
+                                                        if (bspx_not_implemented[0])
+                                                                q_strlcat (bspx_not_implemented, ", ", sizeof(bspx_not_implemented));
+                                                        q_strlcat (bspx_not_implemented, lump_name, sizeof(bspx_not_implemented));
+                                                }
+                                                break;
+                                        }
+                                }
+
+                                if (!known)
+                                {
+                                        if (bspx_unknown[0])
+                                                q_strlcat (bspx_unknown, ", ", sizeof(bspx_unknown));
+                                        q_strlcat (bspx_unknown, lump_name, sizeof(bspx_unknown));
+                                }
+                        }
+
+                        Con_Printf ("BSPX lumps found: %s\n", bspx_found[0] ? bspx_found : "none");
+                        Con_Printf ("BSPX lumps used: %s\n", bspx_used[0] ? bspx_used : "none");
+                        Con_Printf ("BSPX lumps not implemented: %s\n", bspx_not_implemented[0] ? bspx_not_implemented : "none");
+                        Con_Printf ("BSPX lumps unknown: %s\n", bspx_unknown[0] ? bspx_unknown : "none");
+                }
+                else
+                {
+                        Con_Printf ("BSPX lumps found: none\n");
+                        Con_Printf ("BSPX lumps used: none\n");
+                        Con_Printf ("BSPX lumps not implemented: none\n");
+                        Con_Printf ("BSPX lumps unknown: none\n");
+                }
+        }
 }
 
 /*
@@ -2418,15 +2651,17 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 	}
 
 // swap all the lumps
-	mod_base = (byte *)header;
+        mod_base = (byte *)header;
 
-	for (i = 0; i < (int) sizeof(dheader_t) / 4; i++)
-		((int *)header)[i] = LittleLong ( ((int *)header)[i]);
+        for (i = 0; i < (int) sizeof(dheader_t) / 4; i++)
+                ((int *)header)[i] = LittleLong ( ((int *)header)[i]);
+
+        Mod_LogBspLumps (header, mod_base, com_filesize);
 
 // load into heap
 
-	Mod_LoadVertexes (&header->lumps[LUMP_VERTEXES]);
-	Mod_LoadEdges (&header->lumps[LUMP_EDGES], bsp2);
+        Mod_LoadVertexes (&header->lumps[LUMP_VERTEXES]);
+        Mod_LoadEdges (&header->lumps[LUMP_EDGES], bsp2);
 	Mod_LoadSurfedges (&header->lumps[LUMP_SURFEDGES]);
 	Mod_LoadTextures (&header->lumps[LUMP_TEXTURES]);
 	Mod_LoadLighting (&header->lumps[LUMP_LIGHTING]);
