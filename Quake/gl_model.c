@@ -2459,12 +2459,42 @@ static void Mod_LoadSubmodels (lump_t *l)
         size_t                  i, j, count;
         size_t                  q1size = sizeof(dmodelq1_t);
         size_t                  h2size = sizeof(dmodelh2_t);
+        dmodelq1_t      *inq1 = (dmodelq1_t *)(mod_base + l->fileofs);
+        dmodelh2_t      *inh2 = (dmodelh2_t *)(mod_base + l->fileofs);
 
-        // Prefer the original Quake layout when both sizes match to avoid mis-detecting
-        // standard BSPs whose submodel count is also divisible by the Hexen II stride.
-        if (!(l->filelen % q1size))
+        // Detect Hexen II layouts first using the legacy heuristic: Hexen II submodels
+        // have eight hull slots but only populate the first six, so a zero numfaces in
+        // the Quake view of the lump paired with a valid second submodel indicates H2.
+        if ((size_t)l->filelen >= h2size && !(l->filelen % h2size) && !inq1->numfaces && inq1[1].firstface)
         {
-                dmodelq1_t      *in = (dmodelq1_t *)(mod_base + l->fileofs);
+                dmodelh2_t      *in = inh2;
+
+                count = l->filelen / h2size;
+                out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
+
+                loadmodel->submodels = out;
+                loadmodel->numsubmodels = count;
+
+                for (i=0 ; i<count ; i++, in++, out++)
+                {
+                        for (j=0 ; j<3 ; j++)
+                        {       // spread the mins / maxs by a pixel
+                                out->mins[j] = LittleFloat (in->mins[j]) - 1;
+                                out->maxs[j] = LittleFloat (in->maxs[j]) + 1;
+                                out->origin[j] = LittleFloat (in->origin[j]);
+                        }
+                        for (j=0 ; j<MAX_MAP_HULLS && j<sizeof(in->headnode)/sizeof(in->headnode[0]) ; j++)
+                                out->headnode[j] = LittleLong (in->headnode[j]);
+                        for (; j<MAX_MAP_HULLS ; j++)
+                                out->headnode[j] = 0;
+                        out->visleafs = LittleLong (in->visleafs);
+                        out->firstface = LittleLong (in->firstface);
+                        out->numfaces = LittleLong (in->numfaces);
+                }
+        }
+        else if (!(l->filelen % q1size))
+        {
+                dmodelq1_t      *in = inq1;
 
                 count = l->filelen / q1size;
                 out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
@@ -2491,7 +2521,7 @@ static void Mod_LoadSubmodels (lump_t *l)
         }
         else if (!(l->filelen % h2size))
         {
-                dmodelh2_t      *in = (dmodelh2_t *)(mod_base + l->fileofs);
+                dmodelh2_t      *in = inh2;
 
                 count = l->filelen / h2size;
                 out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
