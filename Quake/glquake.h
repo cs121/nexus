@@ -185,6 +185,7 @@ extern	const char	*gl_version;
 	x(void,			GenFramebuffers, (GLsizei n, GLuint *framebuffers))\
 	x(void,			DeleteFramebuffers, (GLsizei n, const GLuint *framebuffers))\
 	x(void,			FramebufferTexture2D, (GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level))\
+	x(void,			FramebufferTextureLayer, (GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer))\
 	x(GLenum,		CheckFramebufferStatus, (GLenum target))\
 	x(void,			BlitFramebuffer, (GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter))\
 	x(void,			DrawBuffers, (GLsizei n, const GLenum *bufs))\
@@ -364,9 +365,9 @@ extern overflowtimes_t dev_overflows; //this stores the last time overflow messa
 
 //johnfitz -- moved here from r_brush.c
 extern int gl_lightmap_format, lightmap_bytes;
-
-#define LMBLOCK_WIDTH	256	//FIXME: make dynamic. if we have a decent card there's no real reason not to use 4k or 16k (assuming there's no lightstyles/dynamics that need uploading...)
-#define LMBLOCK_HEIGHT	256 //Alternatively, use texture arrays, which would avoid the need to switch textures as often.
+extern int lightmap_block_width, lightmap_block_height;
+extern cvar_t gl_lightmap_atlas_size;
+void GL_OnLightmapAtlasSizeChanged (cvar_t *var);
 
 typedef struct lightmap_s
 {
@@ -418,6 +419,7 @@ typedef struct gpulightbuffer_s {
 
 typedef struct gpuframedata_s {
 	float	viewproj[16];
+	float	prev_viewproj[16];
 	float	fogdata[4];
 	float	skyfogdata[4];
 	vec3_t	winddir;
@@ -425,13 +427,17 @@ typedef struct gpuframedata_s {
 	float	screendither;
 	float	texturedither;
 	float	overbright;
-	float	_padding1;
+	float	_padding0;
 	vec3_t	eyepos;
 	float	time;
+	vec3_t	prev_eyepos;
+	float	delta_time;
 	float	zlogscale;
 	float	zlogbias;
-	int		numlights;
-	int		_padding2;
+	int			numlights;
+	int			prev_frame_valid;
+	int			_padding1;
+	int			_padding2;
 } gpuframedata_t;
 
 extern gpulightbuffer_t r_lightbuffer;
@@ -441,6 +447,7 @@ void R_AnimateLight (void);
 void R_MarkSurfaces (void);
 qboolean R_CullBox (vec3_t emins, vec3_t emaxs);
 qboolean R_CullModelForEntity (entity_t *e);
+void R_GetEntityBounds (const entity_t *e, vec3_t mins, vec3_t maxs);
 void R_EntityMatrix (float matrix[16], vec3_t origin, vec3_t angles, unsigned char scale);
 
 void R_InitParticles (void);
@@ -453,6 +460,11 @@ void R_TranslatePlayerSkin (int playernum);
 void R_TranslateNewPlayerSkin (int playernum); //johnfitz -- this handles cases when the actual texture changes
 
 void R_UploadFrameData (void);
+void R_StorePrevFrameState (void);
+qboolean R_PrevFrameValid (void);
+void R_InitShadow (void);
+void R_ShutdownShadow (void);
+void R_ResizeShadowMapIfNeeded (void);
 
 void R_DrawBrushModels (entity_t **ents, int count);
 void R_DrawBrushModels_Water (entity_t **ents, int count, qboolean translucent);
@@ -492,7 +504,7 @@ typedef struct bmodel_gpu_surf_s {
 	GLuint		numedges;
 	GLuint		firstvert;
 	vec3_t		mins;
-	GLuint		padding0;
+	GLuint		lightmap;
 	vec3_t		maxs;
 	GLuint		padding1;
 } bmodel_gpu_surf_t;
@@ -522,6 +534,8 @@ typedef struct glprogs_s {
 	GLuint		viewblend;
 	GLuint		warpscale[2];		// [warp]
 	GLuint		postprocess[3];		// [palettize:off/dithered/direct]
+	GLuint		bloom_extract;
+	GLuint		bloom_blur;
 	GLuint		oit_resolve[2];		// [msaa]
 
 	/* 3d */
@@ -560,12 +574,14 @@ typedef struct glframebufs_s {
 	struct {
 		GLint		samples;
 		GLuint		color_tex;
+		GLuint		velocity_tex;
 		GLuint		depth_stencil_tex;
 		GLuint		fbo;
 	}				scene;
 
 	struct {
 		GLuint		color_tex;
+		GLuint		velocity_tex;
 		GLuint		fbo;
 	}				resolved_scene;
 
@@ -574,6 +590,15 @@ typedef struct glframebufs_s {
 		GLuint		depth_stencil_tex;
 		GLuint		fbo;
 	}				composite;
+
+	struct {
+		GLuint		extract_tex;
+		GLuint		pingpong_tex[2];
+		GLuint		extract_fbo;
+		GLuint		pingpong_fbo[2];
+		int			width;
+		int			height;
+	}				bloom;
 
 	struct {
 		union {
@@ -592,6 +617,7 @@ extern glframebufs_t framebufs;
 
 void GL_CreateFrameBuffers (void);
 void GL_DeleteFrameBuffers (void);
+
 
 void GLLight_CreateResources (void);
 void GLLight_DeleteResources (void);

@@ -154,6 +154,7 @@ float GL_WaterAlphaForEntityTextureType (entity_t *ent, textype_t type)
 
 typedef struct bmodel_gpu_instance_s {
 	float		world[12];	// world matrix (transposed mat4x3)
+	float		prev_world[12];	// previous world matrix (transposed mat4x3)
 	float		alpha;
 	float		padding[3];
 } bmodel_gpu_instance_t;
@@ -163,6 +164,7 @@ typedef struct bmodel_bindless_gpu_call_s {
 	GLfloat		alpha;
 	GLuint64	texture;
 	GLuint64	fullbright;
+	GLuint64	emissive;
 } bmodel_bindless_gpu_call_t;
 
 typedef struct bmodel_bound_gpu_call_s {
@@ -184,7 +186,7 @@ static union {
 	} bindless;
 	struct {
 		bmodel_bound_gpu_call_t		params[MAX_BMODEL_DRAWS];
-		gltexture_t					*textures[MAX_BMODEL_DRAWS][2];
+		gltexture_t					*textures[MAX_BMODEL_DRAWS][3];
 	} bound;
 } bmodel_calls;
 static bmodel_gpu_call_remap_t		bmodel_call_remap[MAX_BMODEL_DRAWS];
@@ -198,18 +200,52 @@ R_InitBModelInstance
 */
 static void R_InitBModelInstance (bmodel_gpu_instance_t *inst, entity_t *ent)
 {
-	vec3_t angles;
-	float mat[16];
+        vec3_t angles;
+        vec3_t prev_angles;
+        vec3_t curr_origin;
+        vec3_t prev_origin;
+        float mat[16];
+        float prev_mat[16];
+        qboolean has_prev = false;
 
-	angles[0] = -ent->angles[0];
-	angles[1] =  ent->angles[1];
-	angles[2] =  ent->angles[2];
-	R_EntityMatrix (mat, ent->origin, angles, ent == &cl_entities[0] ? ENTSCALE_DEFAULT : ent->scale);
+        VectorCopy (ent->origin, curr_origin);
+        VectorCopy (ent->angles, angles);
 
-	MatrixTranspose4x3 (mat, inst->world);
+        if (ent->motion_blur_prev_valid && ent->motion_blur_prev_frame == r_framecount - 1)
+        {
+                VectorCopy (ent->motion_blur_prev_origin, prev_origin);
+                VectorCopy (ent->motion_blur_prev_angles, prev_angles);
+                has_prev = true;
+        }
 
-	inst->alpha = ent->alpha == ENTALPHA_DEFAULT ? -1.f : ENTALPHA_DECODE (ent->alpha);
-	memset (&inst->padding, 0, sizeof(inst->padding));
+        if (!has_prev)
+        {
+                VectorCopy (curr_origin, prev_origin);
+                VectorCopy (angles, prev_angles);
+        }
+
+        vec3_t matrix_angles;
+        vec3_t prev_matrix_angles;
+        float scale = (ent == &cl_entities[0]) ? ENTSCALE_DEFAULT : ent->scale;
+
+        VectorCopy (angles, matrix_angles);
+        VectorCopy (prev_angles, prev_matrix_angles);
+        matrix_angles[0] = -matrix_angles[0];
+        prev_matrix_angles[0] = -prev_matrix_angles[0];
+
+        R_EntityMatrix (mat, curr_origin, matrix_angles, scale);
+        R_EntityMatrix (prev_mat, prev_origin, prev_matrix_angles, scale);
+
+        MatrixTranspose4x3 (mat, inst->world);
+        MatrixTranspose4x3 (prev_mat, inst->prev_world);
+
+        VectorCopy (curr_origin, ent->motion_blur_prev_origin);
+        VectorCopy (ent->angles, ent->motion_blur_prev_angles);
+        ent->motion_blur_prev_frame = r_framecount;
+        ent->motion_blur_prev_valid = true;
+
+        inst->alpha = ent->alpha == ENTALPHA_DEFAULT ? -1.f : ENTALPHA_DECODE (ent->alpha);
+        memset (&inst->padding, 0, sizeof(inst->padding));
 }
 
 /*
@@ -273,12 +309,16 @@ static void R_FlushBModelCalls (void)
 		{
 			GL_Uniform1iFunc (0, i);
 			GL_BindTextures (0, 2, bmodel_calls.bound.textures[i]);
+			GL_Bind (GL_TEXTURE4, bmodel_calls.bound.textures[i][2]);
 			GL_DrawElementsIndirectFunc (GL_TRIANGLES, GL_UNSIGNED_INT, (const byte *)(dstcmdofs + i * sizeof (bmodel_draw_indirect_t)));
 		}
 	}
 
 	num_bmodel_calls = 0;
 }
+
+#define CALLFLAG_EMISSIVE        (1u << 3)
+#define CALLFLAG_ALPHA_TEST      (1u << 4)
 
 /*
 =============
@@ -289,7 +329,7 @@ static void R_AddBModelCall (int index, int first_instance, int num_instances, t
 {
 	GLuint		flags;
 	float		alpha;
-	gltexture_t	*tx, *fb;
+	gltexture_t	*tx, *fb, *em;
 
 	if (num_bmodel_calls == MAX_BMODEL_DRAWS)
 		R_FlushBModelCalls ();
@@ -298,21 +338,27 @@ static void R_AddBModelCall (int index, int first_instance, int num_instances, t
 	{
 		tx = t->gltexture;
 		fb = t->fullbright;
+		em = t->emissive;
 		if (r_lightmap_cheatsafe)
-			tx = fb = NULL;
+			tx = fb = em = NULL;
 		if (!gl_fullbrights.value && t->type != TEXTYPE_SKY)
 			fb = NULL;
 	}
 	else
 	{
 		tx = fb = whitetexture;
+		em = NULL;
 	}
 
 	if (!gl_zfix.value || map_checks.value)
 		zfix = 0;
 
-	flags = zfix | ((fb != NULL) << 1) | ((r_fullbright_cheatsafe != false) << 2);
-	alpha = t ? GL_WaterAlphaForTextureType (t->type) : 1.f;
+        flags = zfix | ((fb != NULL) << 1) | ((r_fullbright_cheatsafe != false) << 2);
+        if (em != NULL)
+                flags |= CALLFLAG_EMISSIVE;
+        if (t && t->type == TEXTYPE_CUTOUT)
+                flags |= CALLFLAG_ALPHA_TEST;
+        alpha = t ? GL_WaterAlphaForTextureType (t->type) : 1.f;
 
 	if (gl_bindless_able)
 	{
@@ -321,6 +367,7 @@ static void R_AddBModelCall (int index, int first_instance, int num_instances, t
 		call->alpha = alpha;
 		call->texture = tx ? tx->bindless_handle : greytexture->bindless_handle;
 		call->fullbright = fb ? fb->bindless_handle : blacktexture->bindless_handle;
+		call->emissive = em ? em->bindless_handle : blacktexture->bindless_handle;
 	}
 	else
 	{
@@ -332,6 +379,7 @@ static void R_AddBModelCall (int index, int first_instance, int num_instances, t
 		call->padding = 0;
 		textures[0] = tx ? tx : greytexture;
 		textures[1] = fb ? fb : blacktexture;
+		textures[2] = em ? em : blacktexture;
 	}
 
 	SDL_assert (num_instances > 0);
@@ -374,12 +422,12 @@ static GLuint R_ChooseBModelProgram (qboolean oit, qboolean alphatest)
 }
 
 typedef enum {
-	BP_SOLID,
-	BP_ALPHATEST,
-	BP_SKYLAYERS,
-	BP_SKYCUBEMAP,
-	BP_SKYSTENCIL,
-	BP_SHOWTRIS,
+        BP_SOLID,
+        BP_ALPHATEST,
+        BP_SKYLAYERS,
+        BP_SKYCUBEMAP,
+        BP_SKYSTENCIL,
+        BP_SHOWTRIS,
 } brushpass_t;
 
 /*
@@ -389,114 +437,117 @@ R_DrawBrushModels_Real
 */
 static void R_DrawBrushModels_Real (entity_t **ents, int count, brushpass_t pass, qboolean translucent)
 {
-	int i, j;
-	int totalinst, baseinst;
-	unsigned state;
-	GLuint program;
-	GLuint buf;
-	GLbyte *ofs;
-	textype_t texbegin, texend;
-	qboolean oit;
+        int i, j;
+        int totalinst, baseinst;
+        unsigned state;
+        GLuint program;
+        GLuint buf;
+        GLbyte *ofs;
+        textype_t texbegin, texend;
+        qboolean oit;
 
-	if (!count)
-		return;
+        if (!count)
+                return;
 
-	if (count > countof(bmodel_instances))
-	{
-		Con_DWarning ("bmodel instance overflow: %d > %d\n", count, (int)countof(bmodel_instances));
-		count = countof(bmodel_instances);
-	}
+        if (count > countof(bmodel_instances))
+        {
+                Con_DWarning ("bmodel instance overflow: %d > %d\n", count, (int)countof(bmodel_instances));
+                count = countof(bmodel_instances);
+        }
 
-	oit = translucent && R_GetEffectiveAlphaMode () == ALPHAMODE_OIT;
-	switch (pass)
-	{
-	default:
-	case BP_SOLID:
-		texbegin = 0;
-		texend = TEXTYPE_CUTOUT;
-		program = R_ChooseBModelProgram (oit, false);
-		break;
-	case BP_ALPHATEST:
-		texbegin = TEXTYPE_CUTOUT;
-		texend = TEXTYPE_CUTOUT + 1;
-		program = R_ChooseBModelProgram (oit, true);
-		break;
-	case BP_SKYLAYERS:
-		texbegin = TEXTYPE_SKY;
-		texend = TEXTYPE_SKY + 1;
-		program = glprogs.skylayers[softemu == SOFTEMU_COARSE];
-		break;
-	case BP_SKYCUBEMAP:
-		texbegin = TEXTYPE_SKY;
-		texend = TEXTYPE_SKY + 1;
-		program = glprogs.skycubemap[Sky_IsAnimated ()][softemu == SOFTEMU_COARSE];
-		break;
-	case BP_SKYSTENCIL:
-		texbegin = TEXTYPE_SKY;
-		texend = TEXTYPE_SKY + 1;
-		program = glprogs.skystencil;
-		break;
-	case BP_SHOWTRIS:
-		texbegin = 0;
-		texend = TEXTYPE_COUNT;
-		program = glprogs.world[0][0][0];
-		break;
-	}
+        oit = translucent && R_GetEffectiveAlphaMode () == ALPHAMODE_OIT;
+        switch (pass)
+        {
+        default:
+        case BP_SOLID:
+                texbegin = 0;
+                texend = TEXTYPE_CUTOUT;
+                program = R_ChooseBModelProgram (oit, false);
+                break;
+        case BP_ALPHATEST:
+                texbegin = TEXTYPE_CUTOUT;
+                texend = TEXTYPE_CUTOUT + 1;
+                program = R_ChooseBModelProgram (oit, true);
+                break;
+        case BP_SKYLAYERS:
+                texbegin = TEXTYPE_SKY;
+                texend = TEXTYPE_SKY + 1;
+                program = glprogs.skylayers[softemu == SOFTEMU_COARSE];
+                break;
+        case BP_SKYCUBEMAP:
+                texbegin = TEXTYPE_SKY;
+                texend = TEXTYPE_SKY + 1;
+                program = glprogs.skycubemap[Sky_IsAnimated ()][softemu == SOFTEMU_COARSE];
+                break;
+        case BP_SKYSTENCIL:
+                texbegin = TEXTYPE_SKY;
+                texend = TEXTYPE_SKY + 1;
+                program = glprogs.skystencil;
+                break;
+        case BP_SHOWTRIS:
+                texbegin = 0;
+                texend = TEXTYPE_COUNT;
+                program = glprogs.world[0][0][0];
+                break;
+        }
 
-	// fill instance data
-	for (i = 0, totalinst = 0; i < count; i++)
-		if (ents[i]->model->texofs[texend] - ents[i]->model->texofs[texbegin] > 0)
-			R_InitBModelInstance (&bmodel_instances[totalinst++], ents[i]);
+        for (i = 0, totalinst = 0; i < count; i++)
+        {
+                entity_t *ent = ents[i];
+                if (ent->model->texofs[texend] - ent->model->texofs[texbegin] > 0)
+                        R_InitBModelInstance (&bmodel_instances[totalinst++], ent);
+        }
 
-	if (!totalinst)
-		return;
+        if (!totalinst)
+                return;
 
-	// setup state
-	state = GLS_CULL_BACK | GLS_ATTRIBS(4);
-	if (!translucent)
-		state |= GLS_BLEND_OPAQUE;
-	else
-		state |= GLS_BLEND_ALPHA_OIT | GLS_NO_ZWRITE;
-	
-	R_ResetBModelCalls (program);
-	GL_SetState (state);
-	if (pass <= BP_ALPHATEST)
-		GL_Bind (GL_TEXTURE2, r_fullbright_cheatsafe ? greytexture : lightmap_texture);
-	else if (pass == BP_SKYCUBEMAP)
-		GL_Bind (GL_TEXTURE2, skybox->cubemap);
+        state = GLS_CULL_BACK | GLS_ATTRIBS(4);
+        if (!translucent)
+                state |= GLS_BLEND_OPAQUE;
+        else
+                state |= GLS_BLEND_ALPHA_OIT | GLS_NO_ZWRITE;
 
-	GL_Upload (GL_SHADER_STORAGE_BUFFER, bmodel_instances, sizeof(bmodel_instances[0]) * count, &buf, &ofs);
-	GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 2, buf, (GLintptr)ofs, sizeof(bmodel_instances[0]) * count);
+        R_ResetBModelCalls (program);
+        GL_SetState (state);
+        if (pass <= BP_ALPHATEST)
+        {
+                GL_Bind (GL_TEXTURE2, r_fullbright_cheatsafe ? greytexture : lightmap_texture);
+        }
+        else if (pass == BP_SKYCUBEMAP)
+                GL_Bind (GL_TEXTURE2, skybox->cubemap);
 
-	// generate drawcalls
-	for (i = 0, baseinst = 0; i < count; /**/)
-	{
-		int numinst;
-		entity_t *e = ents[i++];
-		qmodel_t *model = e->model;
-		qboolean isworld = (e == &cl_entities[0]);
-		qboolean isstatic = PTR_IN_RANGE (e, cl_static_entities, cl_static_entities + MAX_STATIC_ENTITIES);
-		qboolean zfix = !isworld && !isstatic;
-		int frame = isworld ? 0 : e->frame;
-		int numtex = model->texofs[texend] - model->texofs[texbegin];
+        GL_Upload (GL_SHADER_STORAGE_BUFFER, bmodel_instances, sizeof(bmodel_instances[0]) * totalinst, &buf, &ofs);
+        GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 2, buf, (GLintptr)ofs, sizeof(bmodel_instances[0]) * totalinst);
 
-		if (!numtex)
-			continue;
+        for (i = 0, baseinst = 0; i < count; /**/)
+        {
+                int numinst;
+                entity_t *e = ents[i++];
+                qmodel_t *model = e->model;
+                qboolean isworld = (e == &cl_entities[0]);
+                qboolean isstatic = PTR_IN_RANGE (e, cl_static_entities, cl_static_entities + MAX_STATIC_ENTITIES);
+                qboolean zfix = !isworld && !isstatic;
+                int frame = isworld ? 0 : e->frame;
+                int numtex = model->texofs[texend] - model->texofs[texbegin];
 
-		for (numinst = 1; i < count && ents[i]->model == model && numinst < MAX_BMODEL_INSTANCES; i++)
-			numinst += (ents[i]->model->texofs[texend] - ents[i]->model->texofs[texbegin]) > 0;
+                if (!numtex)
+                        continue;
 
-		for (j = model->texofs[texbegin]; j < model->texofs[texend]; j++)
-		{
-			texture_t *t = model->textures[model->usedtextures[j]];
-			R_AddBModelCall (model->firstcmd + j, baseinst, numinst, pass != BP_SHOWTRIS ? R_TextureAnimation (t, frame) : 0, zfix);
-		}
+                for (numinst = 1; i < count && ents[i]->model == model && numinst < MAX_BMODEL_INSTANCES; i++)
+                        numinst += (ents[i]->model->texofs[texend] - ents[i]->model->texofs[texbegin]) > 0;
 
-		baseinst += numinst;
-	}
+                for (j = model->texofs[texbegin]; j < model->texofs[texend]; j++)
+                {
+                        texture_t *t = model->textures[model->usedtextures[j]];
+                        R_AddBModelCall (model->firstcmd + j, baseinst, numinst, pass != BP_SHOWTRIS ? R_TextureAnimation (t, frame) : 0, zfix);
+                }
 
-	R_FlushBModelCalls ();
+                baseinst += numinst;
+        }
+
+        R_FlushBModelCalls ();
 }
+
 
 /*
 =============
@@ -659,9 +710,9 @@ R_DrawBrushModels
 */
 void R_DrawBrushModels (entity_t **ents, int count)
 {
-	qboolean translucent;
-	if (!count)
-		return;
+        qboolean translucent;
+        if (!count)
+                return;
 	translucent = (ents[0] != &cl_entities[0]) && !ENTALPHA_OPAQUE (ents[0]->alpha);
 	if (!translucent || R_GetEffectiveAlphaMode () == ALPHAMODE_OIT)
 	{
@@ -694,6 +745,7 @@ void R_DrawBrushModels (entity_t **ents, int count)
 		}
 	}
 }
+
 
 /*
 =============

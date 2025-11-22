@@ -99,6 +99,9 @@
     <ClCompile Include="..\..\Quake\host_cmd.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Quake\q3shader.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\Quake\image.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -383,6 +386,9 @@
     <ClInclude Include="..\..\Quake\protocol.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\..\Quake\q3shader.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\..\Quake\q_stdinc.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -402,6 +408,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Quake\screen.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Quake\sidebar.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Quake\server.h">

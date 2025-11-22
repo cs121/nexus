@@ -1,19 +1,25 @@
 struct InstanceData
 {
 	vec4	WorldMatrix[3];
+	vec4	PrevWorldMatrix[3];
 	vec4	LightColor; // xyz=LightColor w=Alpha
 	int		Pose1;
 	int		Pose2;
 	float	Blend;
-	int		Padding;
+	int		Flags;
 };
 
 layout(std430, binding=1) restrict readonly buffer InstanceBuffer
 {
 	mat4	ViewProj;
+	mat4	PrevViewProj;
 	vec3	EyePos;
+	float	_Pad0;
 	vec4	Fog;
 	float	ScreenDither;
+	float	_Pad1;
+	float	_Pad2;
+	float	_Pad3;
 	InstanceData instances[];
 };
 // ALU-only 16x16 Bayer matrix
@@ -64,8 +70,21 @@ float tri(float x)
 #define SCREEN_SPACE_NOISE() DITHER_NOISE(floor(gl_FragCoord.xy)+0.5)
 #define SUPPRESS_BANDING() bayer(ivec2(gl_FragCoord.xy))
 
+vec2 ComputeVelocity(vec4 curr_clip, vec4 prev_clip)
+{
+	const float EPS = 1e-6;
+	float inv_curr_w = abs(curr_clip.w) > EPS ? 1.0 / curr_clip.w : 0.0;
+	float inv_prev_w = abs(prev_clip.w) > EPS ? 1.0 / prev_clip.w : 0.0;
+	vec2 curr_ndc = curr_clip.xy * inv_curr_w;
+	vec2 prev_ndc = prev_clip.xy * inv_prev_w;
+	return (curr_ndc - prev_ndc) * 0.5;
+}
+
+const int ALIAS_FLAG_NO_MOTION_BLUR = 1;
+
 layout(binding=0) uniform sampler2D Tex;
 layout(binding=1) uniform sampler2D FullbrightTex;
+layout(binding=2) uniform sampler2D EmissiveTex;
 
 #if MODE == 2
 	layout(location=0) noperspective in vec2 in_texcoord;
@@ -74,6 +93,9 @@ layout(binding=1) uniform sampler2D FullbrightTex;
 #endif
 layout(location=1) in vec4 in_color;
 layout(location=2) in vec3 in_pos;
+layout(location=3) noperspective in vec4 in_curr_clip;
+layout(location=4) noperspective in vec4 in_prev_clip;
+layout(location=5) flat in int in_flags;
 
 #define OUT_COLOR out_fragcolor
 #if OIT
@@ -110,17 +132,19 @@ layout(location=2) in vec3 in_pos;
 
 	#define main main_body
 #else
-	layout(location=0) out vec4 OUT_COLOR;
+        layout(location=0) out vec4 OUT_COLOR;
+        layout(location=1) out vec4 out_velocity;
 #endif // OIT
 
 void main()
 {
-	vec2 uv = in_texcoord;
+        vec2 uv = in_texcoord;
+        vec3 emissive = vec3(0.0);
 #if MODE == 2
-	uv -= 0.5 / vec2(textureSize(Tex, 0).xy);
-	vec4 result = textureLod(Tex, uv, 0.);
+        uv -= 0.5 / vec2(textureSize(Tex, 0).xy);
+        vec4 result = textureLod(Tex, uv, 0.);
 #else
-	vec4 result = texture(Tex, uv);
+        vec4 result = texture(Tex, uv);
 #endif
 #if ALPHATEST
 	if (result.a < 0.666)
@@ -130,16 +154,29 @@ void main()
 	result.rgb = mix(result.rgb, result.rgb * in_color.rgb, result.a);
 #endif
 	result.a = in_color.a; // FIXME: This will make almost transparent things cut holes though heavy fog
+        vec3 fullbright;
 #if MODE == 2
-	result.rgb += textureLod(FullbrightTex, uv, 0.).rgb;
+        fullbright = textureLod(FullbrightTex, uv, 0.).rgb;
+        emissive = textureLod(EmissiveTex, uv, 0.).rgb;
 #else
-	result.rgb += texture(FullbrightTex, uv).rgb;
+        fullbright = texture(FullbrightTex, uv).rgb;
+        emissive = texture(EmissiveTex, uv).rgb;
 #endif
-	result.rgb = clamp(result.rgb, 0.0, 1.0);
-	float fog = exp2(abs(Fog.w) * -dot(in_pos, in_pos));
+        result.rgb += fullbright;
+        result.rgb += emissive;
+        result.rgb = clamp(result.rgb, 0.0, 1.0);
+        float fog = exp2(abs(Fog.w) * -dot(in_pos, in_pos));
 	fog = clamp(fog, 0.0, 1.0);
 	result.rgb = mix(Fog.rgb, result.rgb, fog);
 	out_fragcolor = result;
+#if !OIT
+        vec2 velocity = ComputeVelocity(in_curr_clip, in_prev_clip);
+        float viewModelMask = ((in_flags & ALIAS_FLAG_NO_MOTION_BLUR) != 0) ? 1.0 : 0.0;
+        vec2 velocityOut = vec2(0.0);
+        if (viewModelMask < 0.5 && result.a >= 0.999)
+                velocityOut = velocity * result.a;
+        out_velocity = vec4(velocityOut, viewModelMask, 0.0);
+#endif
 #if MODE == 1 || MODE == 2
 	// Note: sign bit is used as overbright flag
 	if (abs(Fog.w) > 0.)

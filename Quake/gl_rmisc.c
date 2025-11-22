@@ -52,6 +52,31 @@ extern cvar_t gl_zfix; // QuakeSpasm z-fighting fix
 extern cvar_t r_alphasort;
 extern cvar_t r_oit;
 extern cvar_t r_dither;
+extern cvar_t r_dof;
+extern cvar_t r_dof_autofocus;
+extern cvar_t r_dof_focus;
+extern cvar_t r_dof_range;
+extern cvar_t r_dof_strength;
+extern cvar_t r_motionblur;
+extern cvar_t r_motionblur_shutter;
+extern cvar_t r_motionblur_maxradiuspixels;
+extern cvar_t r_motionblur_maxsamples;
+extern cvar_t r_motionblur_minvelocity;
+extern cvar_t r_motionblur_depththreshold;
+extern cvar_t r_tonemap;
+extern cvar_t r_tonemap_exposure;
+extern cvar_t r_bloom;
+extern cvar_t r_bloom_threshold;
+extern cvar_t r_vignette;
+extern cvar_t r_vignette_radius_inner;
+extern cvar_t r_vignette_radius_outer;
+extern cvar_t r_vignette_falloff;
+extern cvar_t r_vignette_color_r;
+extern cvar_t r_vignette_color_g;
+extern cvar_t r_vignette_color_b;
+extern cvar_t r_vignette_blend_mode;
+extern cvar_t r_vignette_noise;
+extern cvar_t r_chromatic_aberration;
 
 #if defined(USE_SIMD)
 extern cvar_t r_simd;
@@ -307,11 +332,11 @@ void R_Init (void)
 		cmd->completion = R_ShowbboxesFilter_Completion_f;
 	Cmd_AddCommand ("r_showbboxes_filter_clear", R_ShowbboxesFilterClear_f);
 
-	Cvar_RegisterVariable (&r_norefresh);
-	Cvar_RegisterVariable (&r_lightmap);
-	Cvar_RegisterVariable (&r_fullbright);
-	Cvar_RegisterVariable (&r_drawentities);
-	Cvar_RegisterVariable (&r_drawviewmodel);
+        Cvar_RegisterVariable (&r_norefresh);
+        Cvar_RegisterVariable (&r_lightmap);
+        Cvar_RegisterVariable (&r_fullbright);
+        Cvar_RegisterVariable (&r_drawentities);
+        Cvar_RegisterVariable (&r_drawviewmodel);
 	Cvar_RegisterVariable (&r_wateralpha);
 	Cvar_SetCallback (&r_wateralpha, R_SetWateralpha_f);
 	Cvar_RegisterVariable (&r_litwater);
@@ -327,6 +352,31 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_alphasort);
 	Cvar_RegisterVariable (&r_oit);
 	Cvar_RegisterVariable (&r_dither);
+	Cvar_RegisterVariable (&r_dof);
+        Cvar_RegisterVariable (&r_dof_autofocus);
+	Cvar_RegisterVariable (&r_dof_focus);
+	Cvar_RegisterVariable (&r_dof_range);
+	Cvar_RegisterVariable (&r_dof_strength);
+        Cvar_RegisterVariable (&r_motionblur);
+        Cvar_RegisterVariable (&r_motionblur_shutter);
+        Cvar_RegisterVariable (&r_motionblur_maxradiuspixels);
+        Cvar_RegisterVariable (&r_motionblur_maxsamples);
+        Cvar_RegisterVariable (&r_motionblur_minvelocity);
+        Cvar_RegisterVariable (&r_motionblur_depththreshold);
+	Cvar_RegisterVariable (&r_tonemap);
+	Cvar_RegisterVariable (&r_tonemap_exposure);
+	Cvar_RegisterVariable (&r_bloom);
+	Cvar_RegisterVariable (&r_bloom_threshold);
+	Cvar_RegisterVariable (&r_vignette);
+	Cvar_RegisterVariable (&r_vignette_radius_inner);
+	Cvar_RegisterVariable (&r_vignette_radius_outer);
+	Cvar_RegisterVariable (&r_vignette_falloff);
+	Cvar_RegisterVariable (&r_vignette_color_r);
+	Cvar_RegisterVariable (&r_vignette_color_g);
+	Cvar_RegisterVariable (&r_vignette_color_b);
+	Cvar_RegisterVariable (&r_vignette_blend_mode);
+	Cvar_RegisterVariable (&r_vignette_noise);
+	Cvar_RegisterVariable (&r_chromatic_aberration);
 	Cvar_RegisterVariable (&r_overbrightbits);
 	Cvar_SetCallback (&r_overbrightbits, R_OverbrightBits_f);
 
@@ -354,6 +404,9 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_showfields_align);
 	Cvar_RegisterVariable (&gl_farclip);
 	Cvar_RegisterVariable (&gl_fullbrights);
+	Cvar_RegisterVariable (&gl_lightmap_atlas_size);
+	Cvar_SetCallback (&gl_lightmap_atlas_size, GL_OnLightmapAtlasSizeChanged);
+	GL_OnLightmapAtlasSizeChanged (&gl_lightmap_atlas_size);
 	Cvar_SetCallback (&gl_fullbrights, GL_Fullbrights_f);
 	Cvar_RegisterVariable (&gl_overbright_models);
 	Cvar_RegisterVariable (&r_lerpmodels);
@@ -497,20 +550,22 @@ static void R_ParseWorldspawn (void)
 		data = COM_ParseEx(data, CPE_ALLOWTRUNC);
 		if (!data)
 			return; // error
-		q_strlcpy(value, com_token, sizeof(value));
+                q_strlcpy(value, com_token, sizeof(value));
 
-		if (!strcmp("wateralpha", key))
-			map_wateralpha = atof(value);
+                if (!strcmp("wateralpha", key))
+                        map_wateralpha = atof(value);
 
-		if (!strcmp("lavaalpha", key))
-			map_lavaalpha = atof(value);
+                if (!strcmp("lavaalpha", key))
+                        map_lavaalpha = atof(value);
 
-		if (!strcmp("telealpha", key))
-			map_telealpha = atof(value);
+                if (!strcmp("telealpha", key))
+                        map_telealpha = atof(value);
 
-		if (!strcmp("slimealpha", key))
-				map_slimealpha = atof(value);
-	}
+                if (!strcmp("slimealpha", key))
+                                map_slimealpha = atof(value);
+
+        }
+
 }
 
 
@@ -532,16 +587,17 @@ void R_NewMap (void)
 	VEC_CLEAR (r_pointfile);
 
 	GL_BuildLightmaps ();
-	GL_BuildBModelVertexBuffer ();
-	GL_BuildBModelMarkBuffers ();
-	//ericw -- no longer load alias models into a VBO here, it's done in Mod_LoadAliasModel
+        GL_BuildBModelVertexBuffer ();
+        GL_BuildBModelMarkBuffers ();
+        //ericw -- no longer load alias models into a VBO here, it's done in Mod_LoadAliasModel
 
-	r_framecount = 0; //johnfitz -- paranoid?
-	r_visframecount = 0; //johnfitz -- paranoid?
+        r_framecount = 0; //johnfitz -- paranoid?
+        r_visframecount = 0; //johnfitz -- paranoid?
 
-	Sky_NewMap (); //johnfitz -- skybox in worldspawn
-	Fog_NewMap (); //johnfitz -- global fog in worldspawn
-	R_ParseWorldspawn (); //ericw -- wateralpha, lavaalpha, telealpha, slimealpha in worldspawn
+
+        Sky_NewMap (); //johnfitz -- skybox in worldspawn
+        Fog_NewMap (); //johnfitz -- global fog in worldspawn
+        R_ParseWorldspawn (); //ericw -- wateralpha, lavaalpha, telealpha, slimealpha in worldspawn
 
 	// Load pointfile if map has no vis data and either developer mode is on or the game was started from a map editing tool
 	if (developer.value || map_checks.value)
@@ -572,8 +628,9 @@ void R_TimeRefresh_f (void)
 	{
 		GL_BeginRendering(&glx, &gly, &glwidth, &glheight);
 		r_refdef.viewangles[1] = i*(360.0/128.0);
-		R_RenderView ();
-		GL_EndRendering ();
+               R_RenderView ();
+               GL_PostProcess ();
+               GL_EndRendering ();
 	}
 
 	glFinish ();
@@ -1040,4 +1097,16 @@ void GL_ReserveDeviceMemory (GLenum target, size_t numbytes, GLuint *outbuf, siz
 	*outofs = frameres_device_offset;
 
 	frameres_device_offset += numbytes;
+}
+
+void R_InitShadow (void)
+{
+}
+
+void R_ShutdownShadow (void)
+{
+}
+
+void R_ResizeShadowMapIfNeeded (void)
+{
 }

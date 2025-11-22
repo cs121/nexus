@@ -53,13 +53,17 @@ typedef struct {
 
 typedef struct aliasinstance_s {
 	float		worldmatrix[12];
+	float		prev_worldmatrix[12];
 	vec3_t		lightcolor;
 	float		alpha;
 	int32_t		pose1;
 	int32_t		pose2;
 	float		blend;
-	int32_t		padding;
+	int32_t		flags;
 } aliasinstance_t;
+
+#define ALIAS_INSTANCE_FLAG_NONE          0
+#define ALIAS_INSTANCE_FLAG_NO_MOTION_BLUR (1 << 0)
 
 struct ibuf_s {
 	int			count;
@@ -67,6 +71,7 @@ struct ibuf_s {
 
 	struct {
 		float	matviewproj[16];
+		float	prev_matviewproj[16];
 		vec3_t	eyepos;
 		float	_pad;
 		vec4_t	fog;
@@ -283,7 +288,7 @@ void R_SetupAliasLighting (entity_t	*e)
 		lightcolor[2] = 256.0f;
 	}
 
-	VectorScale (lightcolor, 1.0f / 200.0f, lightcolor);
+        VectorScale (lightcolor, 1.0f / 200.0f, lightcolor);
 }
 
 /*
@@ -305,7 +310,7 @@ void R_FlushAliasInstances (qboolean showtris)
 	GLuint		buffers[2];
 	GLintptr	offsets[2];
 	GLsizeiptr	sizes[2];
-	gltexture_t	*textures[2];
+	gltexture_t	*textures[3];
 
 	if (!ibuf.count)
 		return;
@@ -347,6 +352,7 @@ void R_FlushAliasInstances (qboolean showtris)
 	GL_SetState (state);
 
 	memcpy (ibuf.global.matviewproj, r_matviewproj, sizeof (r_matviewproj));
+	memcpy (ibuf.global.prev_matviewproj, r_framedata.prev_viewproj, sizeof (r_framedata.prev_viewproj));
 	memcpy (ibuf.global.eyepos, r_refdef.vieworg, sizeof (r_refdef.vieworg));
 	memcpy (ibuf.global.fog, r_framedata.fogdata, 3 * sizeof (float));
 	// use fog density sign bit as overbright flag
@@ -405,29 +411,38 @@ void R_FlushAliasInstances (qboolean showtris)
 
 		textures[0] = hdr->gltextures[skinnum][anim];
 		textures[1] = hdr->fbtextures[skinnum][anim];
+		textures[2] = hdr->emissivetextures[skinnum][anim];
 		if (hdr == mainhdr && ibuf.ent->colormap != vid.colormap && !gl_nocolors.value)
 			if (CL_IsPlayerEnt (ibuf.ent)) /* && !strcmp (ibuf.ent->model->name, "progs/player.mdl") */
 				textures[0] = playertextures[ibuf.ent - cl_entities - 1];
 
 		if (!gl_fullbrights.value)
+		{
 			textures[1] = blacktexture;
+			textures[2] = blacktexture;
+		}
 
 		if (r_lightmap_cheatsafe)
 		{
 			textures[0] = greytexture;
 			textures[1] = blacktexture;
+			textures[2] = blacktexture;
 		}
 
 		if (!textures[1])
 			textures[1] = blacktexture;
 
+		if (!textures[2])
+			textures[2] = blacktexture;
+
 		if (showtris)
 		{
 			textures[0] = blacktexture;
 			textures[1] = whitetexture;
+			textures[2] = blacktexture;
 		}
 
-		GL_BindTextures (0, 2, textures);
+		GL_BindTextures (0, 3, textures);
 
 		GL_DrawElementsInstancedFunc (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, (void *)hdr->eboofs, ibuf.count);
 
@@ -521,17 +536,17 @@ static void R_DrawAliasModel_Real (entity_t *e, qboolean showtris)
 	//
 	// set up for alpha blending
 	//
-	if (r_lightmap_cheatsafe) //no alpha in drawflat or lightmap mode
-		entalpha = 1;
-	else
-		entalpha = ENTALPHA_DECODE(e->alpha);
+        if (r_lightmap_cheatsafe) //no alpha in drawflat or lightmap mode
+                entalpha = 1;
+        else
+                entalpha = ENTALPHA_DECODE(e->alpha);
 
-	if (entalpha == 0)
-		return;
+        if (entalpha == 0)
+                return;
 
-	//
-	// set up lighting
-	//
+        //
+        // set up lighting
+        //
 	rs_aliaspolys += paliashdr->numtris;
 	R_SetupAliasLighting (e);
 
@@ -552,13 +567,53 @@ static void R_DrawAliasModel_Real (entity_t *e, qboolean showtris)
 		ibuf.ent = e;
 
 	instance = &ibuf.inst[ibuf.count++];
+	instance->flags = ALIAS_INSTANCE_FLAG_NONE;
 
-	MatrixTranspose4x3 (model_matrix, instance->worldmatrix);
+	{
+		float prev_model_matrix[16];
+		vec3_t prev_origin;
+		vec3_t prev_angles;
+		qboolean have_prev = false;
+
+		if (e != &cl.viewent && e->motion_blur_prev_valid && e->motion_blur_prev_frame == r_framecount - 1)
+		{
+			VectorCopy (e->motion_blur_prev_origin, prev_origin);
+			VectorCopy (e->motion_blur_prev_angles, prev_angles);
+			have_prev = true;
+		}
+
+		if (!have_prev)
+		{
+			VectorCopy (lerpdata.origin, prev_origin);
+			VectorCopy (lerpdata.angles, prev_angles);
+		}
+
+		if (e == &cl.viewent)
+		{
+			memcpy (prev_model_matrix, model_matrix, sizeof (model_matrix));
+		}
+		else
+		{
+			R_EntityMatrix (prev_model_matrix, prev_origin, prev_angles, e->scale);
+			ApplyTranslation (prev_model_matrix, paliashdr->scale_origin[0], paliashdr->scale_origin[1] * fovscale, paliashdr->scale_origin[2] * fovscale);
+			ApplyScale (prev_model_matrix, paliashdr->scale[0], paliashdr->scale[1] * fovscale, paliashdr->scale[2] * fovscale);
+		}
+
+		MatrixTranspose4x3 (model_matrix, instance->worldmatrix);
+		MatrixTranspose4x3 (prev_model_matrix, instance->prev_worldmatrix);
+	}
+
+	VectorCopy (lerpdata.origin, e->motion_blur_prev_origin);
+	VectorCopy (lerpdata.angles, e->motion_blur_prev_angles);
+	e->motion_blur_prev_frame = r_framecount;
+	e->motion_blur_prev_valid = true;
 
 	instance->lightcolor[0] = lightcolor[0];
 	instance->lightcolor[1] = lightcolor[1];
 	instance->lightcolor[2] = lightcolor[2];
 	instance->alpha = entalpha;
+	if (e == &cl.viewent)
+		instance->flags |= ALIAS_INSTANCE_FLAG_NO_MOTION_BLUR;
 	instance->pose1 = lerpdata.pose1;
 	instance->pose2 = lerpdata.pose2;
 	instance->blend = lerpdata.blend;
@@ -582,10 +637,10 @@ R_DrawAliasModels
 */
 void R_DrawAliasModels (entity_t **ents, int count)
 {
-	int i;
-	for (i = 0; i < count; i++)
-		R_DrawAliasModel_Real (ents[i], false);
-	R_FlushAliasInstances (false);
+        int i;
+        for (i = 0; i < count; i++)
+                R_DrawAliasModel_Real (ents[i], false);
+        R_FlushAliasInstances (false);
 }
 
 /*
@@ -595,8 +650,8 @@ R_DrawAliasModels_ShowTris
 */
 void R_DrawAliasModels_ShowTris (entity_t **ents, int count)
 {
-	int i;
-	for (i = 0; i < count; i++)
-		R_DrawAliasModel_Real (ents[i], true);
-	R_FlushAliasInstances (true);
+        int i;
+        for (i = 0; i < count; i++)
+                R_DrawAliasModel_Real (ents[i], true);
+        R_FlushAliasInstances (true);
 }

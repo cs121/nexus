@@ -3,30 +3,14 @@
 #else
 	layout(binding=0) uniform sampler2D Tex;
 	layout(binding=1) uniform sampler2D FullbrightTex;
+        layout(binding=4) uniform sampler2D EmissiveTex;
 #endif
 layout(binding=2) uniform sampler2D LMTex;
-
-layout(std140, binding=0) uniform FrameDataUBO
-{
-	mat4	ViewProj;
-	vec4	Fog;
-	vec4	SkyFog;
-	vec3	WindDir;
-	float	WindPhase;
-	float	ScreenDither;
-	float	TextureDither;
-	float	Overbright;
-	float	_Pad0;
-	vec3	EyePos;
-	float	Time;
-	float	ZLogScale;
-	float	ZLogBias;
-	uint	NumLights;
-};
+#include "frame_uniforms.glsl"
 
 vec3 ApplyFog(vec3 clr, vec3 p)
 {
-	float fog = exp2(-Fog.w * dot(p, p));
+        float fog = exp2(-Fog.w * dot(p, p));
 	fog = clamp(fog, 0.0, 1.0);
 	return mix(Fog.rgb, clr, fog);
 }
@@ -68,6 +52,7 @@ struct Call
 #if BINDLESS
 	uvec2	txhandle;
 	uvec2	fbhandle;
+	uvec2	emhandle;
 #else
 	int		baseinstance;
 	int		padding;
@@ -76,7 +61,9 @@ struct Call
 const uint
 	CF_USE_POLYGON_OFFSET = 1u,
 	CF_USE_FULLBRIGHT = 2u,
-	CF_NOLIGHTMAP = 4u
+	CF_NOLIGHTMAP = 4u,
+	CF_USE_EMISSIVE = 8u,
+	CF_ALPHA_TEST = 16u
 ;
 
 layout(std430, binding=1) restrict readonly buffer CallBuffer
@@ -92,7 +79,11 @@ layout(std430, binding=1) restrict readonly buffer CallBuffer
 struct Instance
 {
 	vec4	mat[3];
+	vec4	prev_mat[3];
 	float	alpha;
+	float	pad0;
+	float	pad1;
+	float	pad2;
 };
 
 layout(std430, binding=2) restrict readonly buffer InstanceBuffer
@@ -100,11 +91,41 @@ layout(std430, binding=2) restrict readonly buffer InstanceBuffer
 	Instance instance_data[];
 };
 
+vec3 TransformPosition(vec3 p, vec4 mat[3])
+{
+	mat4x3 world = transpose(mat3x4(mat[0], mat[1], mat[2]));
+	return (world * vec4(p, 1.0)).xyz;
+}
+
 vec3 Transform(vec3 p, Instance instance)
 {
-	mat4x3 world = transpose(mat3x4(instance.mat[0], instance.mat[1], instance.mat[2]));
-	return mat3(world[0], world[1], world[2]) * p + world[3];
+	return TransformPosition(p, instance.mat);
 }
+
+vec3 TransformPrev(vec3 p, Instance instance)
+{
+	return TransformPosition(p, instance.prev_mat);
+}
+
+layout(location=0) flat in uint in_flags;
+layout(location=1) flat in float in_alpha;
+layout(location=2) in vec3 in_pos;
+#if MODE == 1
+        layout(location=3) centroid in vec2 in_uv;
+#else
+        layout(location=3) in vec2 in_uv;
+#endif
+layout(location=4) centroid in vec2 in_lmuv;
+layout(location=5) in float in_depth;
+layout(location=6) noperspective in vec2 in_coord;
+layout(location=7) flat in vec4 in_styles;
+layout(location=8) flat in float in_lmofs;
+#if BINDLESS
+        layout(location=9) flat in uvec4 in_samplers0;
+        layout(location=10) flat in uvec2 in_samplers1;
+#endif
+layout(location=11) noperspective in vec4 in_curr_clip;
+layout(location=12) noperspective in vec4 in_prev_clip;
 
 // ALU-only 16x16 Bayer matrix
 float bayer01(ivec2 coord)
@@ -154,22 +175,30 @@ float tri(float x)
 #define SCREEN_SPACE_NOISE() DITHER_NOISE(floor(gl_FragCoord.xy)+0.5)
 #define SUPPRESS_BANDING() bayer(ivec2(gl_FragCoord.xy))
 
-layout(location=0) flat in uint in_flags;
-layout(location=1) flat in float in_alpha;
-layout(location=2) in vec3 in_pos;
-#if MODE == 1
-	layout(location=3) centroid in vec2 in_uv;
+vec2 ComputeVelocity(vec4 curr_clip, vec4 prev_clip)
+{
+	const float EPS = 1e-6;
+	float inv_curr_w = abs(curr_clip.w) > EPS ? 1.0 / curr_clip.w : 0.0;
+	float inv_prev_w = abs(prev_clip.w) > EPS ? 1.0 / prev_clip.w : 0.0;
+	vec2 curr_ndc = curr_clip.xy * inv_curr_w;
+	vec2 prev_ndc = prev_clip.xy * inv_prev_w;
+	return (curr_ndc - prev_ndc) * 0.5;
+}
+
+float DepthToCanonical(float depth)
+{
+#if REVERSED_Z
+        return 1.0 - depth;
 #else
-	layout(location=3) in vec2 in_uv;
+        return depth;
 #endif
-layout(location=4) centroid in vec2 in_lmuv;
-layout(location=5) in float in_depth;
-layout(location=6) noperspective in vec2 in_coord;
-layout(location=7) flat in vec4 in_styles;
-layout(location=8) flat in float in_lmofs;
-#if BINDLESS
-	layout(location=9) flat in uvec4 in_samplers;
-#endif
+}
+
+vec3 ComputeSunLight(vec3 world_pos, vec3 normal)
+{
+        return vec3(0.0);
+}
+
 
 #define OUT_COLOR out_fragcolor
 #if OIT
@@ -207,6 +236,7 @@ layout(location=8) flat in float in_lmofs;
 	#define main main_body
 #else
 	layout(location=0) out vec4 OUT_COLOR;
+        layout(location=1) out vec4 out_velocity;
 #endif // OIT
 
 void main()
@@ -216,21 +246,28 @@ void main()
 	return;
 #endif
 	vec3 fullbright = vec3(0.);
+        vec3 emissive = vec3(0.);
 	vec2 uv = in_uv;
 #if MODE == 2
 	uv = uv * 2.0 + 0.125 * sin(uv.yx * (3.14159265 * 2.0) + Time);
 #endif
 #if BINDLESS
-	sampler2D Tex = sampler2D(in_samplers.xy);
-	sampler2D FullbrightTex;
-	if ((in_flags & CF_USE_FULLBRIGHT) != 0u)
-	{
-		FullbrightTex = sampler2D(in_samplers.zw);
-		fullbright = texture(FullbrightTex, uv).rgb;
-	}
+        sampler2D Tex = sampler2D(in_samplers0.xy);
+        if ((in_flags & CF_USE_FULLBRIGHT) != 0u)
+        {
+                sampler2D FullbrightTex = sampler2D(in_samplers0.zw);
+                fullbright = texture(FullbrightTex, uv).rgb;
+        }
+        if ((in_flags & CF_USE_EMISSIVE) != 0u)
+        {
+                sampler2D EmissiveSampler = sampler2D(in_samplers1.xy);
+                emissive = texture(EmissiveSampler, uv).rgb;
+        }
 #else
-	if ((in_flags & CF_USE_FULLBRIGHT) != 0u)
-		fullbright = texture(FullbrightTex, uv).rgb;
+        if ((in_flags & CF_USE_FULLBRIGHT) != 0u)
+                fullbright = texture(FullbrightTex, uv).rgb;
+        if ((in_flags & CF_USE_EMISSIVE) != 0u)
+                emissive = texture(EmissiveTex, uv).rgb;
 #endif
 #if DITHER >= 2
 	vec4 result = texture(Tex, uv, -1.0);
@@ -274,7 +311,21 @@ void main()
                 }
         }
 
+        vec3 surface_normal = vec3(0.0, 0.0, 1.0);
+        vec3 surface_normal_vec = cross(dFdx(in_pos), dFdy(in_pos));
+        float surface_normal_len = length(surface_normal_vec);
+        if (surface_normal_len > 0.0)
+                surface_normal = surface_normal_vec / surface_normal_len;
         vec3 total_light = clamp(static_light, 0.0, 1.0);
+        vec3 specular_light = vec3(0.0);
+        vec3 to_eye = EyePos - in_pos;
+        float view_length = length(to_eye);
+        vec3 view_dir = vec3(0.0, 0.0, 1.0);
+        if (view_length > 0.0)
+                view_dir = to_eye / view_length;
+
+        const float SPECULAR_POWER = 16.0;
+        const float SPECULAR_SCALE = 0.4;
 
         if (NumLights > 0u)
         {
@@ -290,9 +341,9 @@ void main()
 			int cluster_idx = cluster_coord.x + cluster_coord.y * LIGHT_TILES_X + cluster_coord.z * LIGHT_TILES_X * LIGHT_TILES_Y;
 			total_light = vec3(ivec3((cluster_idx + 1) * 0x45d9f3b) >> ivec3(0, 8, 16) & 255) / 255.0;
 #endif // SHOW_ACTIVE_LIGHT_CLUSTERS
-			vec3 dynamic_light = vec3(0.);
+                        vec3 dynamic_light = vec3(0.);
 			vec4 plane;
-			plane.xyz = normalize(cross(dFdx(in_pos), dFdy(in_pos)));
+			plane.xyz = surface_normal;
 			plane.w = dot(in_pos, plane.xyz);
 			for (i = 0u, ofs = 0u; i < 2u; i++, ofs += 32u)
 			{
@@ -309,32 +360,66 @@ void main()
 					float minlight = l.minlight;
 					if (rad < minlight)
 						continue;
-					vec3 local_pos = l.origin - plane.xyz * dist;
-					minlight = rad - minlight;
-					dist = length(in_pos - local_pos);
-					dynamic_light += clamp((minlight - dist) / 16.0, 0.0, 1.0) * max(0., rad - dist) / 256. * l.color;
+                                        vec3 local_pos = l.origin - plane.xyz * dist;
+                                        minlight = rad - minlight;
+                                        vec3 light_vec = local_pos - in_pos;
+                                        float surface_dist = length(light_vec);
+                                        float attenuation = clamp((minlight - surface_dist) / 16.0, 0.0, 1.0);
+                                        float falloff = max(0., rad - surface_dist) / 256.;
+                                        vec3 light_contrib = attenuation * falloff * l.color;
+                                        dynamic_light += light_contrib;
+                                        if (attenuation > 0.0 && falloff > 0.0 && surface_dist > 0.0)
+                                        {
+                                                vec3 light_dir = light_vec / surface_dist;
+                                                float ndotl = max(dot(surface_normal, light_dir), 0.0);
+                                                if (ndotl > 0.0)
+                                                {
+                                                        vec3 half_vec = light_dir + view_dir;
+                                                        float half_len = length(half_vec);
+                                                        if (half_len > 0.0)
+                                                        {
+                                                                half_vec /= half_len;
+                                                                float ndoth = max(dot(surface_normal, half_vec), 0.0);
+                                                                float spec = pow(ndoth, SPECULAR_POWER) * ndotl;
+                                                                specular_light += light_contrib * spec * SPECULAR_SCALE;
+                                                        }
+                                                }
+                                        }
 				}
 			}
                         total_light += max(min(dynamic_light, 1. - total_light), 0.);
                 }
         }
+
+        vec3 sun_light = ComputeSunLight(in_pos, surface_normal);
+        total_light += max(min(sun_light, 1. - total_light), 0.);
 #if DITHER >= 2
         vec3 clamped_light = clamp(total_light, 0.0, 1.0);
-        vec3 total_lightmap = clamp(floor(clamped_light * 63. + 0.5) * (Overbright / 63.), 0.0, 1.0);
+        vec3 total_lightmap = clamp(floor(clamped_light * 63. + 0.5) * (Overbright / 63.), 0.0, Overbright);
 #else
-        vec3 total_lightmap = clamp(total_light * Overbright, 0.0, 1.0);
+        vec3 total_lightmap = clamp(total_light * Overbright, 0.0, Overbright);
 #endif
 #if MODE != 1
         result.rgb = mix(result.rgb, result.rgb * total_lightmap, result.a);
 #else
         result.rgb *= total_lightmap;
 #endif
-	result.rgb += fullbright;
-	result = clamp(result, 0.0, 1.0);
-	result.rgb = ApplyFog(result.rgb, in_pos - EyePos);
+        result.rgb += fullbright;
+        result.rgb += emissive;
+        vec3 spec_clamped = clamp(specular_light, vec3(0.0), vec3(Overbright));
+        result.rgb += spec_clamped * clamp(result.a, 0.0, 1.0);
+        result = clamp(result, 0.0, 1.0);
+        result.rgb = ApplyFog(result.rgb, in_pos - EyePos);
 
-	result.a = in_alpha; // FIXME: This will make almost transparent things cut holes though heavy fog
-	out_fragcolor = result;
+        result.a = in_alpha; // FIXME: This will make almost transparent things cut holes though heavy fog
+        out_fragcolor = result;
+#if !OIT
+        vec2 velocity = ComputeVelocity(in_curr_clip, in_prev_clip);
+        vec2 velocityOut = vec2(0.0);
+        if (result.a >= 0.999)
+                velocityOut = velocity * result.a;
+        out_velocity = vec4(velocityOut, 0.0, 0.0);
+#endif
 #if DITHER == 1
 	vec3 dpos = fwidth(in_pos);
 	float farblend = clamp(max(dpos.x, max(dpos.y, dpos.z)) * 0.5 - 0.125, 0., 1.);

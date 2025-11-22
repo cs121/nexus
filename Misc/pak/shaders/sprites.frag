@@ -1,20 +1,4 @@
-layout(std140, binding=0) uniform FrameDataUBO
-{
-	mat4	ViewProj;
-	vec4	Fog;
-	vec4	SkyFog;
-	vec3	WindDir;
-	float	WindPhase;
-	float	ScreenDither;
-	float	TextureDither;
-	float	Overbright;
-	float	_Pad0;
-	vec3	EyePos;
-	float	Time;
-	float	ZLogScale;
-	float	ZLogBias;
-	uint	NumLights;
-};
+#include "frame_uniforms.glsl"
 
 vec3 ApplyFog(vec3 clr, vec3 p)
 {
@@ -77,6 +61,7 @@ layout(location=0) in vec2 in_uv;
 layout(location=1) in vec3 in_pos;
 
 layout(location=0) out vec4 out_fragcolor;
+layout(location=1) out vec4 out_velocity;
 
 void main()
 {
@@ -85,12 +70,13 @@ void main()
 		discard;
 	result.rgb = ApplyFog(result.rgb, in_pos);
 	out_fragcolor = result;
+        out_velocity = vec4(0.0);
 #if DITHER
 	if (Fog.w > 0.)
 	{
-		out_fragcolor.rgb = sqrt(out_fragcolor.rgb);
-		out_fragcolor.rgb += SCREEN_SPACE_NOISE() * ScreenDither;
-		out_fragcolor.rgb *= out_fragcolor.rgb;
+	out_fragcolor.rgb = sqrt(out_fragcolor.rgb);
+	out_fragcolor.rgb += SCREEN_SPACE_NOISE() * ScreenDither;
+	out_fragcolor.rgb *= out_fragcolor.rgb;
 	}
 #else
 	out_fragcolor.rgb += SUPPRESS_BANDING() * ScreenDither;

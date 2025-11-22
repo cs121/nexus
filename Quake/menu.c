@@ -3872,9 +3872,9 @@ void M_AdjustSliders (int dir)
 	case OPT_ALPHAMODE:
 		VID_Menu_ChooseNextAlphaMode (dir);
 		break;
-	case OPT_DLIGHTS:
-		Cbuf_AddText ("toggle r_dynamic\n");
-		break;
+        case OPT_DLIGHTS:
+                Cbuf_AddText ("toggle r_dynamic\n");
+                break;
 	case OPT_SOFTEMU:
 		Cvar_SetValueQuick (&r_softemu, (int)(q_max (r_softemu.value, 0.f) + 4 + dir) % 4);
 		break;
@@ -4489,9 +4489,9 @@ static void M_Options_DrawItem (int y, int item)
 	case OPT_ALPHAMODE:
 		M_Print (x, y, VID_Menu_GetAlphaModeDesc ());
 		break;
-	case OPT_DLIGHTS:
-		M_DrawCheckbox (x, y, r_dynamic.value);
-		break;
+        case OPT_DLIGHTS:
+                M_DrawCheckbox (x, y, r_dynamic.value);
+                break;
 	case OPT_SOFTEMU:
 		M_Print (x, y, VID_Menu_GetSoftEmuDesc ());
 		break;

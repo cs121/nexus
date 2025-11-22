@@ -5,23 +5,7 @@
 	layout(binding=1) uniform sampler2D AlphaLayer;
 #endif
 
-layout(std140, binding=0) uniform FrameDataUBO
-{
-	mat4	ViewProj;
-	vec4	Fog;
-	vec4	SkyFog;
-	vec3	WindDir;
-	float	WindPhase;
-	float	ScreenDither;
-	float	TextureDither;
-	float	Overbright;
-	float	_Pad0;
-	vec3	EyePos;
-	float	Time;
-	float	ZLogScale;
-	float	ZLogBias;
-	uint	NumLights;
-};
+#include "frame_uniforms.glsl"
 
 vec3 ApplyFog(vec3 clr, vec3 p)
 {
@@ -84,6 +68,7 @@ layout(location=0) in vec3 in_dir;
 #endif
 
 layout(location=0) out vec4 out_fragcolor;
+layout(location=1) out vec4 out_velocity;
 
 void main()
 {
@@ -97,5 +82,6 @@ void main()
 	result.rgb = mix(result.rgb, layer.rgb, layer.a);
 	result.rgb = mix(result.rgb, SkyFog.rgb, SkyFog.a);
 	out_fragcolor = result;
+        out_velocity = vec4(0.0);
 	out_fragcolor.rgb += SUPPRESS_BANDING() * ScreenDither;
 }

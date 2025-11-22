@@ -1,33 +1,27 @@
 #if BINDLESS
-	#extension GL_ARB_bindless_texture : require
+        #extension GL_ARB_bindless_texture : require
 #else
-	layout(binding=0) uniform sampler2D Tex;
+        layout(binding=0) uniform sampler2D Tex;
+        layout(binding=1) uniform sampler2D FullbrightTex;
+        layout(binding=4) uniform sampler2D EmissiveTex;
 #endif
 
-layout(std140, binding=0) uniform FrameDataUBO
-{
-	mat4	ViewProj;
-	vec4	Fog;
-	vec4	SkyFog;
-	vec3	WindDir;
-	float	WindPhase;
-	float	ScreenDither;
-	float	TextureDither;
-	float	Overbright;
-	float	_Pad0;
-	vec3	EyePos;
-	float	Time;
-	float	ZLogScale;
-	float	ZLogBias;
-	uint	NumLights;
-};
+#include "frame_uniforms.glsl"
 
 vec3 ApplyFog(vec3 clr, vec3 p)
 {
-	float fog = exp2(-Fog.w * dot(p, p));
-	fog = clamp(fog, 0.0, 1.0);
-	return mix(Fog.rgb, clr, fog);
+        float fog = exp2(-Fog.w * dot(p, p));
+        fog = clamp(fog, 0.0, 1.0);
+        return mix(Fog.rgb, clr, fog);
 }
+
+const uint
+        CF_USE_POLYGON_OFFSET = 1u,
+        CF_USE_FULLBRIGHT = 2u,
+        CF_NOLIGHTMAP = 4u,
+        CF_USE_EMISSIVE = 8u,
+        CF_ALPHA_TEST = 16u
+;
 
 // ALU-only 16x16 Bayer matrix
 float bayer01(ivec2 coord)
@@ -77,12 +71,26 @@ float tri(float x)
 #define SCREEN_SPACE_NOISE() DITHER_NOISE(floor(gl_FragCoord.xy)+0.5)
 #define SUPPRESS_BANDING() bayer(ivec2(gl_FragCoord.xy))
 
-layout(location=0) flat in float in_alpha;
-layout(location=1) in vec2 in_uv;
-layout(location=2) in vec3 in_pos;
+vec2 ComputeVelocity(vec4 curr_clip, vec4 prev_clip)
+{
+	const float EPS = 1e-6;
+	float inv_curr_w = abs(curr_clip.w) > EPS ? 1.0 / curr_clip.w : 0.0;
+	float inv_prev_w = abs(prev_clip.w) > EPS ? 1.0 / prev_clip.w : 0.0;
+	vec2 curr_ndc = curr_clip.xy * inv_curr_w;
+	vec2 prev_ndc = prev_clip.xy * inv_prev_w;
+	return (curr_ndc - prev_ndc) * 0.5;
+}
+
+layout(location=0) flat in uint in_flags;
+layout(location=1) flat in float in_alpha;
+layout(location=2) in vec2 in_uv;
+layout(location=3) in vec3 in_pos;
 #if BINDLESS
-	layout(location=3) flat in uvec2 in_sampler;
+        layout(location=4) flat in uvec4 in_samplers0;
+        layout(location=5) flat in uvec2 in_samplers1;
 #endif
+layout(location=6) noperspective in vec4 in_curr_clip;
+layout(location=7) noperspective in vec4 in_prev_clip;
 
 #define OUT_COLOR out_fragcolor
 #if OIT
@@ -120,18 +128,46 @@ layout(location=2) in vec3 in_pos;
 	#define main main_body
 #else
 	layout(location=0) out vec4 OUT_COLOR;
+        layout(location=1) out vec4 out_velocity;
 #endif // OIT
 
 void main()
 {
-	vec2 uv = in_uv * 2.0 + 0.125 * sin(in_uv.yx * (3.14159265 * 2.0) + Time);
+        vec3 fullbright = vec3(0.0);
+        vec3 emissive = vec3(0.0);
+        vec2 uv = in_uv * 2.0 + 0.125 * sin(in_uv.yx * (3.14159265 * 2.0) + Time);
 #if BINDLESS
-	sampler2D Tex = sampler2D(in_sampler);
+        sampler2D Tex = sampler2D(in_samplers0.xy);
+        if ((in_flags & CF_USE_FULLBRIGHT) != 0u)
+        {
+                sampler2D FullbrightTex = sampler2D(in_samplers0.zw);
+                fullbright = texture(FullbrightTex, uv).rgb;
+        }
+        if ((in_flags & CF_USE_EMISSIVE) != 0u)
+        {
+                sampler2D EmissiveSampler = sampler2D(in_samplers1.xy);
+                emissive = texture(EmissiveSampler, uv).rgb;
+        }
+#else
+        if ((in_flags & CF_USE_FULLBRIGHT) != 0u)
+                fullbright = texture(FullbrightTex, uv).rgb;
+        if ((in_flags & CF_USE_EMISSIVE) != 0u)
+                emissive = texture(EmissiveTex, uv).rgb;
 #endif
-	vec4 result = texture(Tex, uv);
-	result.rgb = ApplyFog(result.rgb, in_pos);
-	result.a *= in_alpha;
-	out_fragcolor = result;
+        vec4 result = texture(Tex, uv);
+        result.rgb += fullbright;
+        result.rgb += emissive;
+        result.rgb = clamp(result.rgb, 0.0, 1.0);
+        result.rgb = ApplyFog(result.rgb, in_pos);
+        result.a *= in_alpha;
+        out_fragcolor = result;
+#if !OIT
+        vec2 velocity = ComputeVelocity(in_curr_clip, in_prev_clip);
+        vec2 velocityOut = vec2(0.0);
+        if (result.a >= 0.999)
+                velocityOut = velocity * result.a;
+        out_velocity = vec4(velocityOut, 0.0, 0.0);
+#endif
 #if DITHER
 	if (Fog.w > 0.)
 	{

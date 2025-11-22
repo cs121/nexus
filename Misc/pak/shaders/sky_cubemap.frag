@@ -1,20 +1,4 @@
-layout(std140, binding=0) uniform FrameDataUBO
-{
-	mat4	ViewProj;
-	vec4	Fog;
-	vec4	SkyFog;
-	vec3	WindDir;
-	float	WindPhase;
-	float	ScreenDither;
-	float	TextureDither;
-	float	Overbright;
-	float	_Pad0;
-	vec3	EyePos;
-	float	Time;
-	float	ZLogScale;
-	float	ZLogBias;
-	uint	NumLights;
-};
+#include "frame_uniforms.glsl"
 
 vec3 ApplyFog(vec3 clr, vec3 p)
 {
@@ -76,6 +60,7 @@ layout(binding=2) uniform samplerCube Skybox;
 layout(location=0) in vec3 in_dir;
 
 layout(location=0) out vec4 out_fragcolor;
+layout(location=1) out vec4 out_velocity;
 
 void main()
 {
@@ -95,6 +80,7 @@ void main()
 	out_fragcolor = vec4(base.rgb * (1.0 - combined.a) + combined.rgb, 1);
 #else
 	out_fragcolor = texture(Skybox, in_dir);
+        out_velocity = vec4(0.0);
 #endif
 	out_fragcolor.rgb = mix(out_fragcolor.rgb, SkyFog.rgb, SkyFog.a);
 #if DITHER
