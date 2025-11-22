@@ -2457,22 +2457,43 @@ static void Mod_LoadSubmodels (lump_t *l)
 {
         mmodel_t        *out;
         size_t                  i, j, count;
+        size_t                  q1size = sizeof(dmodelq1_t);
+        size_t                  h2size = sizeof(dmodelh2_t);
 
-        //detect whether this is a hexen2 8-hull map or a quake 4-hull map
-        dmodelq1_t      *inq1 = (dmodelq1_t *)(mod_base + l->fileofs);
-        dmodelh2_t      *inh2 = (dmodelh2_t *)(mod_base + l->fileofs);
-        //the numfaces is a bit of a hack. hexen2 only actually uses 6 of its 8 hulls and we depend upon this.
-        //this means that the 7th and 8th are null. q1.numfaces of the world equates to h2.hull[6], so should have a value for q1, and be 0 for hexen2.
-        //this should work even for maps that have enough submodels to realign the size.
-        //note that even if the map loads, you're on your own regarding the palette (hurrah for retexturing projects?).
-        //fixme: we don't fix up the clipnodes yet, the player is fine, shamblers/ogres/fiends/vores will have issues.
-        //unfortunately c doesn't do templates, which would make all this code a bit less copypastay
-        if ((size_t)l->filelen >= sizeof(*inh2) && !(l->filelen % sizeof(*inh2)) && !inq1->numfaces && inq1[1].firstface)
+        // Prefer the original Quake layout when both sizes match to avoid mis-detecting
+        // standard BSPs whose submodel count is also divisible by the Hexen II stride.
+        if (!(l->filelen % q1size))
         {
-                dmodelh2_t      *in = inh2;
-                if (l->filelen % sizeof(*in))
-                        Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-                count = l->filelen / sizeof(*in);
+                dmodelq1_t      *in = (dmodelq1_t *)(mod_base + l->fileofs);
+
+                count = l->filelen / q1size;
+                out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
+
+                loadmodel->submodels = out;
+                loadmodel->numsubmodels = count;
+
+                for (i=0 ; i<count ; i++, in++, out++)
+                {
+                        for (j=0 ; j<3 ; j++)
+                        {       // spread the mins / maxs by a pixel
+                                out->mins[j] = LittleFloat (in->mins[j]) - 1;
+                                out->maxs[j] = LittleFloat (in->maxs[j]) + 1;
+                                out->origin[j] = LittleFloat (in->origin[j]);
+                        }
+                        for (j=0 ; j<MAX_MAP_HULLS && j<sizeof(in->headnode)/sizeof(in->headnode[0]) ; j++)
+                                out->headnode[j] = LittleLong (in->headnode[j]);
+                        for (; j<MAX_MAP_HULLS ; j++)
+                                out->headnode[j] = 0;
+                        out->visleafs = LittleLong (in->visleafs);
+                        out->firstface = LittleLong (in->firstface);
+                        out->numfaces = LittleLong (in->numfaces);
+                }
+        }
+        else if (!(l->filelen % h2size))
+        {
+                dmodelh2_t      *in = (dmodelh2_t *)(mod_base + l->fileofs);
+
+                count = l->filelen / h2size;
                 out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
 
                 loadmodel->submodels = out;
@@ -2497,31 +2518,7 @@ static void Mod_LoadSubmodels (lump_t *l)
         }
         else
         {
-                dmodelq1_t      *in = inq1;
-                if (l->filelen % sizeof(*in))
-                        Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-                count = l->filelen / sizeof(*in);
-                out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
-
-                loadmodel->submodels = out;
-                loadmodel->numsubmodels = count;
-
-                for (i=0 ; i<count ; i++, in++, out++)
-                {
-                        for (j=0 ; j<3 ; j++)
-                        {       // spread the mins / maxs by a pixel
-                                out->mins[j] = LittleFloat (in->mins[j]) - 1;
-                                out->maxs[j] = LittleFloat (in->maxs[j]) + 1;
-                                out->origin[j] = LittleFloat (in->origin[j]);
-                        }
-                        for (j=0 ; j<MAX_MAP_HULLS && j<sizeof(in->headnode)/sizeof(in->headnode[0]) ; j++)
-                                out->headnode[j] = LittleLong (in->headnode[j]);
-                        for (; j<MAX_MAP_HULLS ; j++)
-                                out->headnode[j] = 0;
-                        out->visleafs = LittleLong (in->visleafs);
-                        out->firstface = LittleLong (in->firstface);
-                        out->numfaces = LittleLong (in->numfaces);
-                }
+                Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
         }
 
         // johnfitz -- check world visleafs -- adapted from bjp
