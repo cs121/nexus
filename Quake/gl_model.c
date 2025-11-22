@@ -546,6 +546,40 @@ static void Q1BSPX_Setup(qmodel_t *mod, char *filebase, unsigned int filelen, lu
         bspxheader = h;
 }
 
+static int Mod_ClampLumpCount(lump_t *l, size_t structsize, const char *lumpname)
+{
+        int count;
+
+        if (!structsize)
+                return 0;
+
+        if (l->filelen % (int)structsize)
+        {
+                int original = l->filelen;
+                l->filelen = (original / (int)structsize) * (int)structsize;
+                Con_Warning("%s: funny %s lump size (%d bytes), truncating to %d entries\n",
+                                loadmodel->name, lumpname, original, l->filelen / (int)structsize);
+        }
+
+        count = l->filelen / (int)structsize;
+        return count;
+}
+
+static int Mod_ClampLength(int *filelen, size_t structsize, const char *lumpname)
+{
+        int count;
+        lump_t lump = {0};
+
+        if (!filelen)
+                return 0;
+
+        lump.filelen = *filelen;
+        count = Mod_ClampLumpCount(&lump, structsize, lumpname);
+        *filelen = lump.filelen;
+
+        return count;
+}
+
 /*
 =================
 Mod_CheckFullbrights -- johnfitz
@@ -1198,10 +1232,8 @@ static void Mod_LoadVertexes (lump_t *l)
 	mvertex_t	*out;
 	int			i, count;
 
-	in = (dvertex_t *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
-		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-	count = l->filelen / sizeof(*in);
+in = (dvertex_t *)(mod_base + l->fileofs);
+count = Mod_ClampLumpCount(l, sizeof(*in), "vertexes");
 	out = (mvertex_t *) Hunk_AllocNameNoFill ( count*sizeof(*out), loadname);
 
 	loadmodel->vertexes = out;
@@ -1225,14 +1257,11 @@ static void Mod_LoadEdges (lump_t *l, int bsp2)
 	medge_t *out;
 	int 	i, count;
 
-	if (bsp2)
-	{
-		dledge_t *in = (dledge_t *)(mod_base + l->fileofs);
+if (bsp2)
+{
+dledge_t *in = (dledge_t *)(mod_base + l->fileofs);
 
-		if (l->filelen % sizeof(*in))
-			Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-
-		count = l->filelen / sizeof(*in);
+count = Mod_ClampLumpCount(l, sizeof(*in), "edges");
 		out = (medge_t *) Hunk_AllocNameNoFill ( (count + 1) * sizeof(*out), loadname);
 
 		loadmodel->edges = out;
@@ -1244,14 +1273,11 @@ static void Mod_LoadEdges (lump_t *l, int bsp2)
 			out->v[1] = LittleLong(in->v[1]);
 		}
 	}
-	else
-	{
-		dsedge_t *in = (dsedge_t *)(mod_base + l->fileofs);
+else
+{
+dsedge_t *in = (dsedge_t *)(mod_base + l->fileofs);
 
-		if (l->filelen % sizeof(*in))
-			Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-
-		count = l->filelen / sizeof(*in);
+count = Mod_ClampLumpCount(l, sizeof(*in), "edges");
 		out = (medge_t *) Hunk_AllocNameNoFill ( (count + 1) * sizeof(*out), loadname);
 
 		loadmodel->edges = out;
@@ -1277,10 +1303,8 @@ static void Mod_LoadTexinfo (lump_t *l)
 	int	i, j, count, miptex;
 	int missing = 0; //johnfitz
 
-	in = (texinfo_t *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
-		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-	count = l->filelen / sizeof(*in);
+in = (texinfo_t *)(mod_base + l->fileofs);
+count = Mod_ClampLumpCount(l, sizeof(*in), "texinfo");
 	out = (mtexinfo_t *) Hunk_AllocNameNoFill ( count*sizeof(*out), loadname);
 
 	loadmodel->texinfo = out;
@@ -1467,22 +1491,18 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
         int facestyles;
         struct decoupled_lm_info_s *decoupledlm = NULL;
 
-        if (bsp2)
-        {
-                ins = NULL;
-                inl = (dlface_t *)(mod_base + l->fileofs);
-                if (l->filelen % sizeof(*inl))
-                        Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-                count = l->filelen / sizeof(*inl);
-        }
-        else
-        {
-                ins = (dsface_t *)(mod_base + l->fileofs);
-                inl = NULL;
-                if (l->filelen % sizeof(*ins))
-                        Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-                count = l->filelen / sizeof(*ins);
-        }
+if (bsp2)
+{
+ins = NULL;
+inl = (dlface_t *)(mod_base + l->fileofs);
+count = Mod_ClampLumpCount(l, sizeof(*inl), "faces");
+}
+else
+{
+ins = (dsface_t *)(mod_base + l->fileofs);
+inl = NULL;
+count = Mod_ClampLumpCount(l, sizeof(*ins), "faces");
+}
         out = (msurface_t *)Hunk_AllocName ( count*sizeof(*out), loadname);
 
         //johnfitz -- warn mappers about exceeding old limits
@@ -1682,10 +1702,8 @@ static void Mod_LoadNodes_S (lump_t *l)
 	dsnode_t	*in;
 	mnode_t		*out;
 
-	in = (dsnode_t *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
-		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-	count = l->filelen / sizeof(*in);
+in = (dsnode_t *)(mod_base + l->fileofs);
+count = Mod_ClampLumpCount(l, sizeof(*in), "nodes");
 	out = (mnode_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
 
 	//johnfitz -- warn mappers about exceeding old limits
@@ -1738,11 +1756,8 @@ static void Mod_LoadNodes_L1 (lump_t *l)
 	dl1node_t	*in;
 	mnode_t		*out;
 
-	in = (dl1node_t *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
-		Sys_Error ("Mod_LoadNodes: funny lump size in %s",loadmodel->name);
-
-	count = l->filelen / sizeof(*in);
+in = (dl1node_t *)(mod_base + l->fileofs);
+count = Mod_ClampLumpCount(l, sizeof(*in), "nodes");
 	out = (mnode_t *)Hunk_AllocName ( count*sizeof(*out), loadname);
 
 	loadmodel->nodes = out;
@@ -1790,11 +1805,8 @@ static void Mod_LoadNodes_L2 (lump_t *l)
 	dl2node_t	*in;
 	mnode_t		*out;
 
-	in = (dl2node_t *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
-		Sys_Error ("Mod_LoadNodes: funny lump size in %s",loadmodel->name);
-
-	count = l->filelen / sizeof(*in);
+in = (dl2node_t *)(mod_base + l->fileofs);
+count = Mod_ClampLumpCount(l, sizeof(*in), "nodes");
 	out = (mnode_t *)Hunk_AllocName ( count*sizeof(*out), loadname);
 
 	loadmodel->nodes = out;
@@ -1864,9 +1876,7 @@ static void Mod_ProcessLeafs_S (dsleaf_t *in, int filelen)
 	mleaf_t		*out;
 	int			i, j, count, p;
 
-	if (filelen % sizeof(*in))
-		Sys_Error ("Mod_ProcessLeafs: funny lump size in %s", loadmodel->name);
-	count = filelen / sizeof(*in);
+count = Mod_ClampLength(&filelen, sizeof(*in), "leafs");
 	out = (mleaf_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
 
 	//johnfitz
@@ -1909,10 +1919,7 @@ static void Mod_ProcessLeafs_L1 (dl1leaf_t *in, int filelen)
 	mleaf_t		*out;
 	int			i, j, count, p;
 
-	if (filelen % sizeof(*in))
-		Sys_Error ("Mod_ProcessLeafs: funny lump size in %s", loadmodel->name);
-
-	count = filelen / sizeof(*in);
+count = Mod_ClampLength(&filelen, sizeof(*in), "leafs");
 
 	out = (mleaf_t *) Hunk_AllocName (count * sizeof(*out), loadname);
 
@@ -1951,10 +1958,7 @@ static void Mod_ProcessLeafs_L2 (dl2leaf_t *in, int filelen)
 	mleaf_t		*out;
 	int			i, j, count, p;
 
-	if (filelen % sizeof(*in))
-		Sys_Error ("Mod_ProcessLeafs: funny lump size in %s", loadmodel->name);
-
-	count = filelen / sizeof(*in);
+count = Mod_ClampLength(&filelen, sizeof(*in), "leafs");
 
 	out = (mleaf_t *) Hunk_AllocName (count * sizeof(*out), loadname);
 
@@ -2178,24 +2182,18 @@ static void Mod_LoadClipnodes (lump_t *l, qboolean bsp2)
 	int			i, count;
 	hull_t		*hull;
 
-	if (bsp2)
-	{
-		ins = NULL;
-		inl = (dlclipnode_t *)(mod_base + l->fileofs);
-		if (l->filelen % sizeof(*inl))
-			Sys_Error ("Mod_LoadClipnodes: funny lump size in %s",loadmodel->name);
-
-		count = l->filelen / sizeof(*inl);
-	}
-	else
-	{
-		ins = (dsclipnode_t *)(mod_base + l->fileofs);
-		inl = NULL;
-		if (l->filelen % sizeof(*ins))
-			Sys_Error ("Mod_LoadClipnodes: funny lump size in %s",loadmodel->name);
-
-		count = l->filelen / sizeof(*ins);
-	}
+if (bsp2)
+{
+ins = NULL;
+inl = (dlclipnode_t *)(mod_base + l->fileofs);
+count = Mod_ClampLumpCount(l, sizeof(*inl), "clipnodes");
+}
+else
+{
+ins = (dsclipnode_t *)(mod_base + l->fileofs);
+inl = NULL;
+count = Mod_ClampLumpCount(l, sizeof(*ins), "clipnodes");
+}
 	out = (mclipnode_t *) Hunk_AllocNameNoFill ( count*sizeof(*out), loadname);
 
 	//johnfitz -- warn about exceeding old limits
@@ -2318,14 +2316,11 @@ static void Mod_LoadMarksurfaces (lump_t *l, int bsp2)
 {
 	int		i, j, count;
 	int		*out;
-	if (bsp2)
-	{
-		unsigned int *in = (unsigned int *)(mod_base + l->fileofs);
+if (bsp2)
+{
+unsigned int *in = (unsigned int *)(mod_base + l->fileofs);
 
-		if (l->filelen % sizeof(*in))
-			Host_Error ("Mod_LoadMarksurfaces: funny lump size in %s",loadmodel->name);
-
-		count = l->filelen / sizeof(*in);
+count = Mod_ClampLumpCount(l, sizeof(*in), "marksurfaces");
 		out = (int*)Hunk_AllocNameNoFill ( count*sizeof(*out), loadname);
 
 		loadmodel->marksurfaces = out;
@@ -2339,14 +2334,11 @@ static void Mod_LoadMarksurfaces (lump_t *l, int bsp2)
 			out[i] = j;
 		}
 	}
-	else
-	{
-		short *in = (short *)(mod_base + l->fileofs);
+else
+{
+short *in = (short *)(mod_base + l->fileofs);
 
-		if (l->filelen % sizeof(*in))
-			Host_Error ("Mod_LoadMarksurfaces: funny lump size in %s",loadmodel->name);
-
-		count = l->filelen / sizeof(*in);
+count = Mod_ClampLumpCount(l, sizeof(*in), "marksurfaces");
 		out = (int*)Hunk_AllocNameNoFill ( count*sizeof(*out), loadname);
 
 		loadmodel->marksurfaces = out;
@@ -2377,10 +2369,8 @@ static void Mod_LoadSurfedges (lump_t *l)
 	int		i, count;
 	int		*in, *out;
 
-	in = (int *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
-		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-	count = l->filelen / sizeof(*in);
+in = (int *)(mod_base + l->fileofs);
+count = Mod_ClampLumpCount(l, sizeof(*in), "surfedges");
 	out = (int *) Hunk_AllocNameNoFill ( count*sizeof(*out), loadname);
 
 	loadmodel->surfedges = out;
@@ -2404,10 +2394,8 @@ static void Mod_LoadPlanes (lump_t *l)
 	int			count;
 	int			bits;
 
-	in = (dplane_t *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
-		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-	count = l->filelen / sizeof(*in);
+in = (dplane_t *)(mod_base + l->fileofs);
+count = Mod_ClampLumpCount(l, sizeof(*in), "planes");
 	out = (mplane_t *) Hunk_AllocNameNoFill ( count*sizeof(*out), loadname);
 
 	loadmodel->planes = out;
@@ -2461,15 +2449,22 @@ static void Mod_LoadSubmodels (lump_t *l)
         size_t                  h2size = sizeof(dmodelh2_t);
         dmodelq1_t      *inq1 = (dmodelq1_t *)(mod_base + l->fileofs);
         dmodelh2_t      *inh2 = (dmodelh2_t *)(mod_base + l->fileofs);
+        size_t                  filelen = l->filelen;
+
+        if ((filelen % q1size) && (filelen % h2size))
+        {
+                Mod_ClampLumpCount(l, q1size, "submodels");
+                filelen = l->filelen;
+        }
 
         // Detect Hexen II layouts first using the legacy heuristic: Hexen II submodels
         // have eight hull slots but only populate the first six, so a zero numfaces in
         // the Quake view of the lump paired with a valid second submodel indicates H2.
-        if ((size_t)l->filelen >= h2size && !(l->filelen % h2size) && !inq1->numfaces && inq1[1].firstface)
+        if (filelen >= h2size && !(filelen % h2size) && !inq1->numfaces && inq1[1].firstface)
         {
                 dmodelh2_t      *in = inh2;
 
-                count = l->filelen / h2size;
+                count = filelen / h2size;
                 out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
 
                 loadmodel->submodels = out;
@@ -2492,11 +2487,11 @@ static void Mod_LoadSubmodels (lump_t *l)
                         out->numfaces = LittleLong (in->numfaces);
                 }
         }
-        else if (!(l->filelen % q1size))
+        else if (!(filelen % q1size))
         {
                 dmodelq1_t      *in = inq1;
 
-                count = l->filelen / q1size;
+                count = filelen / q1size;
                 out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
 
                 loadmodel->submodels = out;
@@ -2519,11 +2514,11 @@ static void Mod_LoadSubmodels (lump_t *l)
                         out->numfaces = LittleLong (in->numfaces);
                 }
         }
-        else if (!(l->filelen % h2size))
+        else if (!(filelen % h2size))
         {
                 dmodelh2_t      *in = inh2;
 
-                count = l->filelen / h2size;
+                count = filelen / h2size;
                 out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
 
                 loadmodel->submodels = out;
@@ -2546,10 +2541,11 @@ static void Mod_LoadSubmodels (lump_t *l)
                         out->numfaces = LittleLong (in->numfaces);
                 }
         }
-        else
-        {
-                Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-        }
+else
+{
+Con_Warning ("MOD_LoadBmodel: funny submodel lump size in %s\n", loadmodel->name);
+return;
+}
 
         // johnfitz -- check world visleafs -- adapted from bjp
         out = loadmodel->submodels;
