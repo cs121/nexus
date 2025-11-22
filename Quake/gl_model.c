@@ -2455,42 +2455,79 @@ Mod_LoadSubmodels
 */
 static void Mod_LoadSubmodels (lump_t *l)
 {
-	dmodel_t	*in;
-	dmodel_t	*out;
-	int			i, j, count;
+        mmodel_t        *out;
+        size_t                  i, j, count;
+        size_t                  q1size = sizeof(dmodelq1_t);
+        size_t                  h2size = sizeof(dmodelh2_t);
 
-	in = (dmodel_t *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
-		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-	count = l->filelen / sizeof(*in);
-	out = (dmodel_t *) Hunk_AllocNameNoFill ( count*sizeof(*out), loadname);
+        // Prefer the original Quake layout when both sizes match to avoid mis-detecting
+        // standard BSPs whose submodel count is also divisible by the Hexen II stride.
+        if (!(l->filelen % q1size))
+        {
+                dmodelq1_t      *in = (dmodelq1_t *)(mod_base + l->fileofs);
 
-	loadmodel->submodels = out;
-	loadmodel->numsubmodels = count;
+                count = l->filelen / q1size;
+                out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
 
-	for (i=0 ; i<count ; i++, in++, out++)
-	{
-		for (j=0 ; j<3 ; j++)
-		{	// spread the mins / maxs by a pixel
-			out->mins[j] = LittleFloat (in->mins[j]) - 1;
-			out->maxs[j] = LittleFloat (in->maxs[j]) + 1;
-			out->origin[j] = LittleFloat (in->origin[j]);
-		}
-		for (j=0 ; j<MAX_MAP_HULLS ; j++)
-			out->headnode[j] = LittleLong (in->headnode[j]);
-		out->visleafs = LittleLong (in->visleafs);
-		out->firstface = LittleLong (in->firstface);
-		out->numfaces = LittleLong (in->numfaces);
-	}
+                loadmodel->submodels = out;
+                loadmodel->numsubmodels = count;
 
-	// johnfitz -- check world visleafs -- adapted from bjp
-	out = loadmodel->submodels;
+                for (i=0 ; i<count ; i++, in++, out++)
+                {
+                        for (j=0 ; j<3 ; j++)
+                        {       // spread the mins / maxs by a pixel
+                                out->mins[j] = LittleFloat (in->mins[j]) - 1;
+                                out->maxs[j] = LittleFloat (in->maxs[j]) + 1;
+                                out->origin[j] = LittleFloat (in->origin[j]);
+                        }
+                        for (j=0 ; j<MAX_MAP_HULLS && j<sizeof(in->headnode)/sizeof(in->headnode[0]) ; j++)
+                                out->headnode[j] = LittleLong (in->headnode[j]);
+                        for (; j<MAX_MAP_HULLS ; j++)
+                                out->headnode[j] = 0;
+                        out->visleafs = LittleLong (in->visleafs);
+                        out->firstface = LittleLong (in->firstface);
+                        out->numfaces = LittleLong (in->numfaces);
+                }
+        }
+        else if (!(l->filelen % h2size))
+        {
+                dmodelh2_t      *in = (dmodelh2_t *)(mod_base + l->fileofs);
 
-	if (out->visleafs > 8192)
-		Con_DWarning ("%i visleafs exceeds standard limit of 8192.\n", out->visleafs);
-	//johnfitz
+                count = l->filelen / h2size;
+                out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
+
+                loadmodel->submodels = out;
+                loadmodel->numsubmodels = count;
+
+                for (i=0 ; i<count ; i++, in++, out++)
+                {
+                        for (j=0 ; j<3 ; j++)
+                        {       // spread the mins / maxs by a pixel
+                                out->mins[j] = LittleFloat (in->mins[j]) - 1;
+                                out->maxs[j] = LittleFloat (in->maxs[j]) + 1;
+                                out->origin[j] = LittleFloat (in->origin[j]);
+                        }
+                        for (j=0 ; j<MAX_MAP_HULLS && j<sizeof(in->headnode)/sizeof(in->headnode[0]) ; j++)
+                                out->headnode[j] = LittleLong (in->headnode[j]);
+                        for (; j<MAX_MAP_HULLS ; j++)
+                                out->headnode[j] = 0;
+                        out->visleafs = LittleLong (in->visleafs);
+                        out->firstface = LittleLong (in->firstface);
+                        out->numfaces = LittleLong (in->numfaces);
+                }
+        }
+        else
+        {
+                Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+        }
+
+        // johnfitz -- check world visleafs -- adapted from bjp
+        out = loadmodel->submodels;
+
+        if (out->visleafs > 8192)
+                Con_DWarning ("%i visleafs exceeds standard limit of 8192.\n", out->visleafs);
+        //johnfitz
 }
-
 /*
 =================
 Mod_BoundsFromClipNode -- johnfitz
@@ -2663,7 +2700,7 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 	int			i, j;
 	int			bsp2;
 	dheader_t	*header;
-	dmodel_t 	*bm;
+	mmodel_t 	*bm;
 	float		radius; //johnfitz
 
 	loadmodel->type = mod_brush;
