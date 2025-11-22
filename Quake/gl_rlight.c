@@ -29,6 +29,171 @@ extern cvar_t r_dynamic;
 
 gpulightbuffer_t r_lightbuffer;
 
+typedef struct
+{
+        struct bspxlgnode_s
+        {
+                int mid[3];
+                int child[8];
+        } *nodes;
+        struct bspxlgleaf_s
+        {
+                int mins[3];
+                int size[3];
+                struct bspxlgsamp_s
+                {
+                        struct bspxlgstyle_s
+                        {
+                                byte style;
+                                byte rgb[3];
+                        } map[4];
+                } *rgbvalues;
+        } *leafs;
+        int gridscale[3];
+        vec3_t mins;
+        int count[3];
+        unsigned int numnodes, numleafs, rootnode;
+} bspxlightgrid_t;
+struct rctx_s {byte *data; int ofs, size;};
+static byte ReadByte(struct rctx_s *ctx)
+{
+        if (ctx->ofs >= ctx->size)
+        {
+                ctx->ofs++;
+                return 0;
+        }
+        return ctx->data[ctx->ofs++];
+}
+static int ReadInt(struct rctx_s *ctx)
+{
+        int r = (int)ReadByte(ctx)<<0;
+                r|= (int)ReadByte(ctx)<<8;
+                r|= (int)ReadByte(ctx)<<16;
+                r|= (int)ReadByte(ctx)<<24;
+        return r;
+}
+static float ReadFloat(struct rctx_s *ctx)
+{
+        union {float f; int i;} u;
+        u.i = ReadInt(ctx);
+        return u.f;
+}
+void BSPX_LightGridLoad(qmodel_t *model, void *lgdata, size_t lgsize)
+{
+        vec3_t step, mins;
+        int size[3];
+        bspxlightgrid_t *grid;
+        unsigned int numstyles, numnodes, numleafs, rootnode;
+        unsigned int nodestart, leafsamps = 0, i, j, k, s;
+        struct bspxlgsamp_s *samp;
+        struct rctx_s ctx = {0};
+        ctx.data = lgdata;
+        ctx.size = lgsize;
+        model->lightgrid = NULL;
+        if (!ctx.data)
+                return;
+
+        for (j = 0; j < 3; j++)
+                step[j] = ReadFloat(&ctx);
+        for (j = 0; j < 3; j++)
+                size[j] = ReadInt(&ctx);
+        for (j = 0; j < 3; j++)
+                mins[j] = ReadFloat(&ctx);
+
+        numstyles = ReadByte(&ctx);     //urgh, misaligned the entire thing
+        rootnode = ReadInt(&ctx);
+        numnodes = ReadInt(&ctx);
+        nodestart = ctx.ofs;
+        ctx.ofs += (3+8)*4*numnodes;
+        numleafs = ReadInt(&ctx);
+        for (i = 0; i < numleafs; i++)
+        {
+                unsigned int lsz[3];
+                ctx.ofs += 3*4;
+                for (j = 0; j < 3; j++)
+                        lsz[j] = ReadInt(&ctx);
+                j = lsz[0]*lsz[1]*lsz[2];
+                leafsamps += j;
+                while (j --> 0)
+                {       //this loop is annonying, memcpy dreams...
+                        s = ReadByte(&ctx);
+                        if (s == 255)
+                                continue;
+                        ctx.ofs += s*4;
+                }
+        }
+
+        grid = Hunk_AllocName(sizeof(*grid) + sizeof(*grid->leafs)*numleafs + sizeof(*grid->nodes)*numnodes + sizeof(struct bspxlgsamp_s)*leafsamps, model->name);
+        grid->leafs = (void*)(grid+1);
+        grid->nodes = (void*)(grid->leafs + numleafs);
+        samp = (void*)(grid->nodes+numnodes);
+
+        for (j = 0; j < 3; j++)
+                grid->gridscale[j] = 1/step[j]; //prefer it as a multiply
+        VectorCopy(mins, grid->mins);
+        VectorCopy(size, grid->count);
+        grid->numnodes = numnodes;
+        grid->numleafs = numleafs;
+        grid->rootnode = rootnode;
+        (void)numstyles;
+
+        //rewind to the nodes. *sigh*
+        ctx.ofs = nodestart;
+        for (i = 0; i < numnodes; i++)
+        {
+                for (j = 0; j < 3; j++)
+                        grid->nodes[i].mid[j] = ReadInt(&ctx);
+                for (j = 0; j < 8; j++)
+                        grid->nodes[i].child[j] = ReadInt(&ctx);
+        }
+        ctx.ofs += 4;
+        for (i = 0; i < numleafs; i++)
+        {
+                for (j = 0; j < 3; j++)
+                        grid->leafs[i].mins[j] = ReadInt(&ctx);
+                for (j = 0; j < 3; j++)
+                        grid->leafs[i].size[j] = ReadInt(&ctx);
+
+                grid->leafs[i].rgbvalues = samp;
+
+                j = grid->leafs[i].size[0]*grid->leafs[i].size[1]*grid->leafs[i].size[2];
+                while (j --> 0)
+                {
+                        s = ReadByte(&ctx);
+                        if (s == 0xff)
+                                memset(samp, 0xff, sizeof(*samp));
+                        else
+                        {
+                                for (k = 0; k < s; k++)
+                                {
+                                        if (k >= 4)
+                                                ReadInt(&ctx);
+                                        else
+                                        {
+                                                samp->map[k].style = ReadByte(&ctx);
+                                                samp->map[k].rgb[0] = ReadByte(&ctx);
+                                                samp->map[k].rgb[1] = ReadByte(&ctx);
+                                                samp->map[k].rgb[2] = ReadByte(&ctx);
+                                        }
+                                }
+                                for (; k < 4; k++)
+                                {
+                                        samp->map[k].style = (byte)~0u;
+                                        samp->map[k].rgb[0] =
+                                        samp->map[k].rgb[1] =
+                                        samp->map[k].rgb[2] = 0;
+                                }
+                        }
+                        samp++;
+                }
+        }
+
+        if (ctx.ofs != ctx.size)
+                grid = NULL;
+
+        model->lightgrid = (void*)grid;
+}
+
 /*
 ==================
 R_AnimateLight
@@ -221,7 +386,7 @@ static void InterpolateLightmap (vec3_t color, msurface_t *surf, int ds, int dt)
 
 	lightmap = surf->samples + ((dt>>4) * ((surf->extents[0]>>4)+1) + (ds>>4))*3; // LordHavoc: *3 for color
 
-	for (maps = 0;maps < MAXLIGHTMAPS && surf->styles[maps] != 255;maps++)
+    for (maps = 0;maps < MAXLIGHTMAPS && surf->styles[maps] != INVALID_LIGHTSTYLE;maps++)
 	{
 		scale = d_lightstylevalue[surf->styles[maps]];
 		r00 += lightmap[      0] * scale; g00 += lightmap[      1] * scale; b00 += lightmap[      2] * scale;

@@ -270,6 +270,9 @@ typedef struct
 	unsigned int	v[2];		// vertex numbers
 } dledge_t;
 
+#define INVALID_LIGHTSTYLE 0xffffu
+#define INVALID_LIGHTSTYLE_OLD 0xffu
+
 #define	MAXLIGHTMAPS	4
 typedef struct
 {
@@ -281,7 +284,7 @@ typedef struct
 	short		texinfo;
 
 // lighting info
-	byte		styles[MAXLIGHTMAPS];
+	unsigned short		styles[MAXLIGHTMAPS];
 	int			lightofs;		// start of [numstyles*surfsize] samples
 } dsface_t;
 
@@ -295,9 +298,17 @@ typedef struct
 	int			texinfo;
 
 // lighting info
-	byte		styles[MAXLIGHTMAPS];
+	unsigned short		styles[MAXLIGHTMAPS];
 	int			lightofs;		// start of [numstyles*surfsize] samples
 } dlface_t;
+
+struct decoupled_lm_info_s
+{
+	unsigned short lmsize[2];		//made explicit. beware MAX_
+	unsigned int lmoffset;		//replacement offset for vanilla compat.
+	vec4_t lmvecs[2]; //lmcoord[] = dotproduct3(vertexcoord, lmvecs[])+lmvecs[][3]
+};
+
 
 #define	AMBIENT_WATER	0
 #define	AMBIENT_SKY		1
