@@ -26,6 +26,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 
+// nodes use 0 contents to differentiate them from leafs
+#ifndef CONTENTS_NODE
+#define CONTENTS_NODE 0
+#endif
+
 static qmodel_t*	loadmodel;
 static char	loadname[32];	// for hunk tags
 
