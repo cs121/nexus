@@ -246,11 +246,11 @@ GL_NumLightmapTaps
 */
 static int GL_NumLightmapTaps (const msurface_t *surf)
 {
-	if (surf->styles[1] == 255)
-		return 1;
-	if (surf->styles[2] == 255)
-		return 2;
-	return 3;
+        if (surf->styles[1] == INVALID_LIGHTSTYLE)
+                return 1;
+        if (surf->styles[2] == INVALID_LIGHTSTYLE)
+                return 2;
+        return 3;
 }
 
 /*
@@ -268,8 +268,8 @@ static void GL_FillSurfaceLightmap (msurface_t *surf)
 	unsigned	*dst;
 	int			s, t, facesize;
 
-	if (!cl.worldmodel->lightdata || !surf->samples || surf->styles[0] == 255)
-		return;
+        if (!cl.worldmodel->lightdata || !surf->samples || surf->styles[0] == INVALID_LIGHTSTYLE)
+                return;
 
 	lm = &lightmaps[surf->lightmaptexturenum];
 	smax = (surf->extents[0]>>4)+1;
@@ -281,13 +281,13 @@ static void GL_FillSurfaceLightmap (msurface_t *surf)
 	src = surf->samples;
 	dst = lightmap_data + yofs * lightmap_width + xofs;
 
-	if (surf->styles[1] == 255) // single lightstyle
-	{
+        if (surf->styles[1] == INVALID_LIGHTSTYLE) // single lightstyle
+        {
 		for (t = 0; t < tmax; t++, dst += lightmap_width)
 			for (s = 0; s < smax; s++, src += 3)
 				dst[s] = src[0] | (src[1] << 8) | (src[2] << 16) | 0xff000000u;
 	}
-	else if (surf->styles[2] == 255) // 2 lightstyles
+        else if (surf->styles[2] == INVALID_LIGHTSTYLE) // 2 lightstyles
 	{
 		for (t = 0; t < tmax; t++, dst += lightmap_width)
 		{
@@ -306,7 +306,7 @@ static void GL_FillSurfaceLightmap (msurface_t *surf)
 			{
 				const byte *mapsrc = src;
 				unsigned r = 0, g = 0, b = 0;
-				for (map = 0; map < 4 && surf->styles[map] != 255; map++, mapsrc += facesize)
+                                for (map = 0; map < 4 && surf->styles[map] != INVALID_LIGHTSTYLE; map++, mapsrc += facesize)
 				{
 					r |= mapsrc[0] << (map << 3);
 					g |= mapsrc[1] << (map << 3);
