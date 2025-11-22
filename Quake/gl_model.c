@@ -161,6 +161,8 @@ static const byte *Mod_FindBspx (const byte *file_data, qfileofs_t filesize, int
 {
         const byte              *scan;
         const byte              *end;
+        const byte              *match = NULL;
+        int                             match_numlumps = 0;
         bspx_header_t   header;
 
         if (!file_data || filesize < (qfileofs_t) (sizeof(dheader_t) + sizeof(bspx_header_t)))
@@ -170,8 +172,10 @@ static const byte *Mod_FindBspx (const byte *file_data, qfileofs_t filesize, int
 
         for (scan = file_data; scan <= end; scan++)
         {
+                const bspx_lump_t *table;
                 int numlumps;
                 qfileofs_t table_bytes;
+                int valid_lumps = 0;
 
                 if (memcmp(scan, "BSPX", 4))
                         continue;
@@ -190,13 +194,36 @@ static const byte *Mod_FindBspx (const byte *file_data, qfileofs_t filesize, int
                 if (scan + sizeof(bspx_header_t) + (size_t)table_bytes > file_data + (size_t)filesize)
                         continue;
 
-                if (out_num_lumps)
-                        *out_num_lumps = numlumps;
+                table = (const bspx_lump_t *)(scan + sizeof(bspx_header_t));
 
-                return scan;
+                for (int i = 0; i < numlumps; i++)
+                {
+                        int lump_ofs = LittleLong (table[i].fileofs);
+                        int lump_len = LittleLong (table[i].filelen);
+
+                        if (lump_len <= 0)
+                                continue;
+
+                        if ((qfileofs_t) lump_ofs < 0 || (qfileofs_t) lump_ofs + (qfileofs_t) lump_len > filesize)
+                        {
+                                valid_lumps = -1; // corrupt or false-positive header
+                                break;
+                        }
+
+                        valid_lumps++;
+                }
+
+                if (valid_lumps <= 0)
+                        continue;
+
+                match = scan; // keep the last valid BSPX header we find
+                match_numlumps = numlumps;
         }
 
-        return NULL;
+        if (match && out_num_lumps)
+                *out_num_lumps = match_numlumps;
+
+        return match;
 }
 
 static void Mod_LogBspLumps (const dheader_t *header, const byte *file_data, qfileofs_t filesize)
