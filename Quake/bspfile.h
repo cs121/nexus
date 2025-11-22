@@ -133,7 +133,28 @@ typedef struct
 	int			headnode[MAX_MAP_HULLS];
 	int			visleafs;		// not including the solid leaf 0
 	int			firstface, numfaces;
-} dmodel_t;
+} mmodel_t;
+
+typedef struct
+{
+	float		mins[3], maxs[3];
+	float		origin[3];
+	int			headnode[4];
+	int			visleafs;		// not including the solid leaf 0
+	int			firstface, numfaces;
+} dmodelq1_t;
+
+typedef struct
+{
+	float		mins[3], maxs[3];
+	float		origin[3];
+	int			headnode[8];
+	int			visleafs;		// not including the solid leaf 0
+	int			firstface, numfaces;
+} dmodelh2_t;
+
+// Use the classic disk layout name for compatibility with existing code paths
+typedef dmodelq1_t dmodel_t;
 
 typedef struct
 {

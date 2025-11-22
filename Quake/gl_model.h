@@ -452,7 +452,7 @@ typedef struct qmodel_s
 	int			firstmodelsurface, nummodelsurfaces;
 
 	int			numsubmodels;
-	dmodel_t	*submodels;
+	mmodel_t	*submodels;
 
 	int			numplanes;
 	mplane_t	*planes;

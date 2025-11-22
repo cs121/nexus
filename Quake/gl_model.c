@@ -2455,42 +2455,82 @@ Mod_LoadSubmodels
 */
 static void Mod_LoadSubmodels (lump_t *l)
 {
-	dmodel_t	*in;
-	dmodel_t	*out;
-	int			i, j, count;
+        mmodel_t        *out;
+        size_t                  i, j, count;
 
-	in = (dmodel_t *)(mod_base + l->fileofs);
-	if (l->filelen % sizeof(*in))
-		Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
-	count = l->filelen / sizeof(*in);
-	out = (dmodel_t *) Hunk_AllocNameNoFill ( count*sizeof(*out), loadname);
+        //detect whether this is a hexen2 8-hull map or a quake 4-hull map
+        dmodelq1_t      *inq1 = (dmodelq1_t *)(mod_base + l->fileofs);
+        dmodelh2_t      *inh2 = (dmodelh2_t *)(mod_base + l->fileofs);
+        //the numfaces is a bit of a hack. hexen2 only actually uses 6 of its 8 hulls and we depend upon this.
+        //this means that the 7th and 8th are null. q1.numfaces of the world equates to h2.hull[6], so should have a value for q1, and be 0 for hexen2.
+        //this should work even for maps that have enough submodels to realign the size.
+        //note that even if the map loads, you're on your own regarding the palette (hurrah for retexturing projects?).
+        //fixme: we don't fix up the clipnodes yet, the player is fine, shamblers/ogres/fiends/vores will have issues.
+        //unfortunately c doesn't do templates, which would make all this code a bit less copypastay
+        if ((size_t)l->filelen >= sizeof(*inh2) && !(l->filelen % sizeof(*inh2)) && !inq1->numfaces && inq1[1].firstface)
+        {
+                dmodelh2_t      *in = inh2;
+                if (l->filelen % sizeof(*in))
+                        Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+                count = l->filelen / sizeof(*in);
+                out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
 
-	loadmodel->submodels = out;
-	loadmodel->numsubmodels = count;
+                loadmodel->submodels = out;
+                loadmodel->numsubmodels = count;
 
-	for (i=0 ; i<count ; i++, in++, out++)
-	{
-		for (j=0 ; j<3 ; j++)
-		{	// spread the mins / maxs by a pixel
-			out->mins[j] = LittleFloat (in->mins[j]) - 1;
-			out->maxs[j] = LittleFloat (in->maxs[j]) + 1;
-			out->origin[j] = LittleFloat (in->origin[j]);
-		}
-		for (j=0 ; j<MAX_MAP_HULLS ; j++)
-			out->headnode[j] = LittleLong (in->headnode[j]);
-		out->visleafs = LittleLong (in->visleafs);
-		out->firstface = LittleLong (in->firstface);
-		out->numfaces = LittleLong (in->numfaces);
-	}
+                for (i=0 ; i<count ; i++, in++, out++)
+                {
+                        for (j=0 ; j<3 ; j++)
+                        {       // spread the mins / maxs by a pixel
+                                out->mins[j] = LittleFloat (in->mins[j]) - 1;
+                                out->maxs[j] = LittleFloat (in->maxs[j]) + 1;
+                                out->origin[j] = LittleFloat (in->origin[j]);
+                        }
+                        for (j=0 ; j<MAX_MAP_HULLS && j<sizeof(in->headnode)/sizeof(in->headnode[0]) ; j++)
+                                out->headnode[j] = LittleLong (in->headnode[j]);
+                        for (; j<MAX_MAP_HULLS ; j++)
+                                out->headnode[j] = 0;
+                        out->visleafs = LittleLong (in->visleafs);
+                        out->firstface = LittleLong (in->firstface);
+                        out->numfaces = LittleLong (in->numfaces);
+                }
+        }
+        else
+        {
+                dmodelq1_t      *in = inq1;
+                if (l->filelen % sizeof(*in))
+                        Sys_Error ("MOD_LoadBmodel: funny lump size in %s",loadmodel->name);
+                count = l->filelen / sizeof(*in);
+                out = (mmodel_t *) Hunk_AllocName ( count*sizeof(*out), loadname);
 
-	// johnfitz -- check world visleafs -- adapted from bjp
-	out = loadmodel->submodels;
+                loadmodel->submodels = out;
+                loadmodel->numsubmodels = count;
 
-	if (out->visleafs > 8192)
-		Con_DWarning ("%i visleafs exceeds standard limit of 8192.\n", out->visleafs);
-	//johnfitz
+                for (i=0 ; i<count ; i++, in++, out++)
+                {
+                        for (j=0 ; j<3 ; j++)
+                        {       // spread the mins / maxs by a pixel
+                                out->mins[j] = LittleFloat (in->mins[j]) - 1;
+                                out->maxs[j] = LittleFloat (in->maxs[j]) + 1;
+                                out->origin[j] = LittleFloat (in->origin[j]);
+                        }
+                        for (j=0 ; j<MAX_MAP_HULLS && j<sizeof(in->headnode)/sizeof(in->headnode[0]) ; j++)
+                                out->headnode[j] = LittleLong (in->headnode[j]);
+                        for (; j<MAX_MAP_HULLS ; j++)
+                                out->headnode[j] = 0;
+                        out->visleafs = LittleLong (in->visleafs);
+                        out->firstface = LittleLong (in->firstface);
+                        out->numfaces = LittleLong (in->numfaces);
+                }
+        }
+
+        // johnfitz -- check world visleafs -- adapted from bjp
+        out = loadmodel->submodels;
+
+        if (out->visleafs > 8192)
+                Con_DWarning ("%i visleafs exceeds standard limit of 8192.\n", out->visleafs);
+        //johnfitz
 }
-
 /*
 =================
 Mod_BoundsFromClipNode -- johnfitz
@@ -2663,7 +2703,7 @@ static void Mod_LoadBrushModel (qmodel_t *mod, void *buffer)
 	int			i, j;
 	int			bsp2;
 	dheader_t	*header;
-	dmodel_t 	*bm;
+	mmodel_t 	*bm;
 	float		radius; //johnfitz
 
 	loadmodel->type = mod_brush;
