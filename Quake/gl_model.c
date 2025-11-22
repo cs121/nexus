@@ -40,6 +40,9 @@ static void Mod_Print (void);
 static cvar_t	external_ents = {"external_ents", "1", CVAR_ARCHIVE};
 static cvar_t	external_vis = {"external_vis", "1", CVAR_ARCHIVE};
 cvar_t			r_md5 = {"r_md5", "1", CVAR_ARCHIVE};
+static cvar_t	external_lits_dir = {"external_lits_dir", "", CVAR_ARCHIVE}; // woods #litdir
+static cvar_t	mod_ignorelmscale = {"mod_ignorelmscale", "0"};
+cvar_t			gl_loadlitfiles = {"gl_loadlitfiles", "1", CVAR_ARCHIVE}; // woods #loadlits
 
 static byte	*mod_novis;
 static int	mod_novis_capacity;
@@ -95,6 +98,9 @@ void Mod_Init (void)
 {
 	Cvar_RegisterVariable (&external_vis);
 	Cvar_RegisterVariable (&external_ents);
+	Cvar_RegisterVariable (&external_lits_dir); // woods #litdir
+	Cvar_RegisterVariable (&gl_loadlitfiles); // woods #loadlits
+	Cvar_RegisterVariable (&mod_ignorelmscale);
 	Cvar_RegisterVariable (&r_md5);
 	Cvar_SetCallback (&r_md5, R_MD5_f);
 
@@ -499,10 +505,14 @@ static void Q1BSPX_Setup(qmodel_t *mod, char *filebase, unsigned int filelen, lu
 
         for (i = 0; i < numlumps; i++, lumps++)
         {
+                unsigned int lumpend;
+
                 if ((lumps->fileofs & 3) && i != LUMP_ENTITIES)
                         misaligned = true;
-                if (offs < lumps->fileofs + lumps->filelen)
-                        offs = lumps->fileofs + lumps->filelen;
+
+                lumpend = (unsigned int)(lumps->fileofs + lumps->filelen);
+                if (offs < lumpend)
+                        offs = lumpend;
         }
         if (misaligned)
                 Con_DWarning("%s contains misaligned lumps\n", mod->name);
@@ -1030,7 +1040,7 @@ static void Mod_LoadLighting (lump_t *l)
                 in = mod_base + l->fileofs;
                 out = loadmodel->lightdata;
 
-                for (unsigned int i = 0;i < (l->filelen / 2) ;i++)
+                for (int i = 0; i < (l->filelen / 2); i++)
                 {
                         q64_b0 = *in++;
                         q64_b1 = *in++;
@@ -1077,7 +1087,7 @@ static void Mod_LoadLighting (lump_t *l)
                 in = loadmodel->lightdata + l->filelen*2; // place the file at the end, so it will not be overwritten until the very last write
                 out = loadmodel->lightdata;
                 memcpy (in, mod_base + l->fileofs, l->filelen);
-                for (unsigned int i = 0;i < l->filelen;i++)
+                for (int i = 0; i < l->filelen; i++)
                 {
                         d = *in++;
                         *out++ = d;
@@ -1312,13 +1322,15 @@ CalcSurfaceExtents
 Fills in s->texturemins[] and s->extents[]
 ================
 */
-static void CalcSurfaceExtents (msurface_t *s)
+static void CalcSurfaceExtents (msurface_t *s, int lmshift)
 {
 	float	mins[2], maxs[2], val;
 	int		i,j, e;
 	mvertex_t	*v;
 	mtexinfo_t	*tex;
 	double	texvecs[2][4];
+
+	(void)lmshift; // reserved for BSPX lightmap scale support
 
 	mins[0] = mins[1] = FLT_MAX;
 	maxs[0] = maxs[1] = -FLT_MAX;
@@ -1440,6 +1452,7 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
         msurface_t      *out;
         int                     i, count, surfnum, lofs, shift;
         int                     planenum, side, texinfon;
+        texture_t       *tex;
 
         unsigned char *lmshift = NULL, defaultshift = 4;
         unsigned int *lmoffset = NULL;
@@ -1565,6 +1578,10 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
                 out->plane = loadmodel->planes + planenum;
                 out->texinfo = loadmodel->texinfo + texinfon;
 
+                tex = loadmodel->textures[out->texinfo->texnum];
+                if (!tex)
+                        tex = r_notexture_mip;
+
                 if (decoupledlm)
                 {
                         lofs = LittleLong(decoupledlm->lmoffset);
@@ -1583,9 +1600,9 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
                         decoupledlm++;
 
                         //make sure we don't segfault even if the texture coords get crappified.
-                        if (out->extents[0] >= LMBLOCK_WIDTH || out->extents[1] >= LMBLOCK_HEIGHT)
+                        if (out->extents[0] >= lightmap_block_width || out->extents[1] >= lightmap_block_height)
                         {
-                                Con_Warning("%s: Bad surface extents (%i*%i, max %i*%u).\n", loadmodel->name, out->extents[0], out->extents[1], LMBLOCK_WIDTH, LMBLOCK_HEIGHT);
+                                Con_Warning("%s: Bad surface extents (%i*%i, max %i*%u).\n", loadmodel->name, out->extents[0], out->extents[1], lightmap_block_width, lightmap_block_height);
                                 out->extents[0] = out->extents[1] = 1;
                         }
                 }
@@ -1610,11 +1627,11 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
                         out->samples = loadmodel->lightdata + (lofs * 3); //johnfitz -- lit support via lordhavoc (was "+ i")
 
                 //johnfitz -- this section rewritten
-                if (!q_strncasecmp(out->texinfo->texture->name,"sky",3)) // sky surface //also note -- was Q_strncmp, changed to match qbsp
+                if (!q_strncasecmp(tex->name,"sky",3)) // sky surface //also note -- was Q_strncmp, changed to match qbsp
                 {
                         out->flags |= (SURF_DRAWSKY | SURF_DRAWTILED);
                 }
-                else if (out->texinfo->texture->name[0] == '*') // warp surface
+                else if (tex->name[0] == '*') // warp surface
                 {
                         out->flags |= SURF_DRAWTURB;
                         if (out->texinfo->flags & TEX_SPECIAL)
@@ -1622,15 +1639,15 @@ static void Mod_LoadFaces (lump_t *l, qboolean bsp2)
                         out->lightmaptexturenum = -1;
 
                 // detect special liquid types
-                        if (!strncmp (out->texinfo->texture->name, "*lava", 5))
+                        if (!strncmp (tex->name, "*lava", 5))
                                 out->flags |= SURF_DRAWLAVA;
-                        else if (!strncmp (out->texinfo->texture->name, "*slime", 6))
+                        else if (!strncmp (tex->name, "*slime", 6))
                                 out->flags |= SURF_DRAWSLIME;
-                        else if (!strncmp (out->texinfo->texture->name, "*tele", 5))
+                        else if (!strncmp (tex->name, "*tele", 5))
                                 out->flags |= SURF_DRAWTELE;
                         else out->flags |= SURF_DRAWWATER;
                 }
-                else if (out->texinfo->texture->name[0] == '{') // ericw -- fence textures
+                else if (tex->name[0] == '{') // ericw -- fence textures
                 {
                         out->flags |= SURF_DRAWFENCE;
                 }
@@ -1814,9 +1831,20 @@ static void Mod_LoadNodes_L2 (lump_t *l)
 	}
 }
 
+static void Mod_SetParent (mnode_t *node, mnode_t *parent)
+{
+	node->parent = parent;
+
+	if (node->contents != CONTENTS_NODE)
+		return;
+
+	Mod_SetParent (node->children[0], node);
+	Mod_SetParent (node->children[1], node);
+}
+
 static void Mod_LoadNodes (lump_t *l, int bsp2)
 {
-	if (bsp2 == 2)
+        if (bsp2 == 2)
 		Mod_LoadNodes_L2(l);
 	else if (bsp2)
 		Mod_LoadNodes_L1(l);
